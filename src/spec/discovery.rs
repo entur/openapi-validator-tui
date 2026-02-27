@@ -16,7 +16,7 @@ pub fn normalize_spec_path(root: &Path, spec: &str) -> Result<PathBuf> {
     } else {
         root.join(&spec_path)
     };
-    if !absolute.exists() {
+    if !absolute.is_file() {
         bail!("Spec file not found: {}", absolute.display());
     }
     let relative = absolute
@@ -66,11 +66,23 @@ fn is_yaml(path: &Path) -> bool {
 }
 
 fn is_openapi_spec(path: &Path) -> bool {
+    // Cheap pre-check: scan first 256 bytes for "openapi:" before doing a full parse.
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(_) => return false,
     };
-    let mut content = String::new();
+    let mut head = [0u8; 256];
+    let n = match file.read(&mut head) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let prefix = String::from_utf8_lossy(&head[..n]);
+    if !prefix.contains("openapi:") {
+        return false;
+    }
+
+    // Full parse to confirm it's a valid mapping with an `openapi` key.
+    let mut content = prefix.into_owned();
     if file.read_to_string(&mut content).is_err() {
         return false;
     }

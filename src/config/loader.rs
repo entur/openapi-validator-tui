@@ -14,7 +14,12 @@ pub fn load(root: &Path) -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let content = fs::read_to_string(&path).context("Failed to read .oavc")?;
-    let config: Config = serde_yaml::from_str(&content).context("Failed to parse .oavc")?;
+    if !path.is_file() {
+        anyhow::bail!(".oavc exists but is not a file: {}", path.display());
+    }
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let config: Config = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
     Ok(config)
 }
