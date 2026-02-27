@@ -7,9 +7,15 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct CancelToken(Arc<AtomicBool>);
 
+impl Default for CancelToken {
+    fn default() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+}
+
 impl CancelToken {
     pub fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self::default()
     }
 
     /// Signal cancellation. Idempotent.

@@ -55,8 +55,14 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     while app.running {
         terminal.draw(|frame| ui::draw(frame, &app))?;
 
-        // Non-blocking: poll for input then drain any docker output.
-        if event::poll(Duration::from_millis(50))?
+        // Poll for input: use a short timeout while validating (to drain
+        // docker output promptly) and a longer one when idle to save CPU.
+        let poll_timeout = if app.validating {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(200)
+        };
+        if event::poll(poll_timeout)?
             && let Event::Key(key) = event::read()?
         {
             handle_key(&mut app, key);

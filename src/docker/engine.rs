@@ -22,7 +22,7 @@ pub fn ensure_available() -> Result<()> {
 pub fn user_args() -> Vec<String> {
     #[cfg(unix)]
     {
-        // SAFETY: these are simple getters with no failure mode.
+        // SAFETY: geteuid() and getegid() are simple POSIX getters that always succeed and have no side effects.
         let uid = unsafe { libc::geteuid() };
         let gid = unsafe { libc::getegid() };
         vec!["--user".into(), format!("{uid}:{gid}")]
