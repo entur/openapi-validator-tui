@@ -21,6 +21,9 @@ serde_yaml = "0.9"
 walkdir = "2.5"
 include_dir = "0.7"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3.24"
 

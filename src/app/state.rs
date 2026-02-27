@@ -1,3 +1,6 @@
+use std::sync::mpsc;
+
+use crate::docker::{CancelToken, OutputLine};
 use crate::pipeline::ValidateReport;
 
 /// Which panel currently has focus.
@@ -88,6 +91,11 @@ pub struct App {
     pub report: Option<ValidateReport>,
     /// Whether a validation is currently running.
     pub validating: bool,
+
+    /// Receiver for streamed container output.
+    pub docker_rx: Option<mpsc::Receiver<OutputLine>>,
+    /// Token to cancel a running container.
+    pub cancel_token: Option<CancelToken>,
 }
 
 impl App {
@@ -103,6 +111,8 @@ impl App {
             detail_tab: 0,
             report: None,
             validating: false,
+            docker_rx: None,
+            cancel_token: None,
         }
     }
 }
