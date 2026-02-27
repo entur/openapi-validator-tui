@@ -8,6 +8,7 @@ mod spec;
 mod ui;
 
 use std::io;
+use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -17,6 +18,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use app::App;
+use docker::OutputLine;
 
 fn main() -> Result<()> {
     // Ensure terminal is restored on panic.
@@ -53,9 +55,14 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     while app.running {
         terminal.draw(|frame| ui::draw(frame, &app))?;
 
-        if let Event::Key(key) = event::read()? {
+        // Non-blocking: poll for input then drain any docker output.
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
             handle_key(&mut app, key);
         }
+
+        drain_docker_output(&mut app);
     }
 
     Ok(())
@@ -134,5 +141,33 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             KeyCode::Up | KeyCode::Char('k') => app.spec_scroll = app.spec_scroll.saturating_sub(1),
             _ => {}
         },
+    }
+}
+
+/// Drain pending docker output lines without blocking.
+fn drain_docker_output(app: &mut App) {
+    let done = if let Some(rx) = &app.docker_rx {
+        let mut finished = false;
+        while let Ok(line) = rx.try_recv() {
+            match line {
+                OutputLine::Stdout(_) | OutputLine::Stderr(_) => {
+                    // TODO: forward to log panel / detail buffer
+                }
+                OutputLine::Done(result) => {
+                    app.validating = false;
+                    let _ = result; // TODO: update app.report from result
+                    finished = true;
+                    break;
+                }
+            }
+        }
+        finished
+    } else {
+        false
+    };
+
+    if done {
+        app.docker_rx = None;
+        app.cancel_token = None;
     }
 }
