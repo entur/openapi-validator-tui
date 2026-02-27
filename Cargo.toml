@@ -1,0 +1,28 @@
+[package]
+name = "lazyoav"
+version = "0.1.0"
+edition = "2024"
+description = "A TUI for exploring, linting, and fixing OpenAPI specs interactively"
+license = "EUPL-1.2"
+repository = "https://github.com/entur/openapi-validator-tui"
+rust-version = "1.92.0"
+
+[[bin]]
+name = "lazyoav"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+crossterm = "0.28"
+ratatui = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+walkdir = "2.5"
+include_dir = "0.7"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
