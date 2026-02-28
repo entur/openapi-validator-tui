@@ -72,15 +72,11 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
         })
         .unwrap_or("YAML");
 
-    // Extract the highlighted spans for the visible window.
-    // Clone the slice so the RefCell borrow is released immediately.
-    let window_highlighted: Vec<Vec<(Style, String)>> = {
-        let mut engine = app.highlight_engine.borrow_mut();
-        let all = engine.highlight_lines(spec_index.lines(), syntax_name);
-        let start_idx = window.start_line - 1;
-        let end_idx = (start_idx + window.lines.len()).min(all.len());
-        all[start_idx..end_idx].to_vec()
-    };
+    // Hold the engine borrow through span construction and render so we can
+    // reference cached Strings directly (via Cow::Borrowed) instead of cloning.
+    let mut engine = app.highlight_engine.borrow_mut();
+    let all_highlighted = engine.highlight_lines(spec_index.lines(), syntax_name);
+    let start_idx = window.start_line - 1;
 
     let lines: Vec<Line> = window
         .lines
@@ -94,14 +90,14 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
 
             let mut spans = vec![gutter];
 
-            if let Some(segments) = window_highlighted.get(i) {
+            if let Some(segments) = all_highlighted.get(start_idx + i) {
                 for (style, text) in segments {
                     let style = if is_target {
                         style.bg(COLOR_SELECTED_BG).add_modifier(Modifier::BOLD)
                     } else {
                         *style
                     };
-                    spans.push(Span::styled(text.clone(), style));
+                    spans.push(Span::styled(text.as_str(), style));
                 }
             }
 
