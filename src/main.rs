@@ -1,13 +1,8 @@
 mod app;
 #[allow(unused)]
-mod config;
-#[allow(unused)]
-mod docker;
-#[allow(unused)]
 mod fix;
 #[allow(unused)]
 mod log_parser;
-mod pipeline;
 #[allow(unused)]
 mod spec;
 mod ui;
@@ -24,8 +19,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use app::App;
-use docker::CancelToken;
-use pipeline::{PipelineEvent, PipelineInput};
+use lazyoav::config;
+use lazyoav::docker::CancelToken;
+use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
 
 fn main() -> Result<()> {
     // Ensure terminal is restored on panic.

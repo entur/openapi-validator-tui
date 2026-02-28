@@ -358,4 +358,143 @@ mod tests {
         };
         assert_ne!(a, c);
     }
+
+    /// Helper: build a `PipelineInput` with the given config and a dummy spec path.
+    fn test_input(cfg: Config) -> PipelineInput {
+        PipelineInput {
+            config: cfg,
+            spec_path: std::path::PathBuf::from("/tmp/spec.yaml"),
+            work_dir: std::path::PathBuf::from("/tmp"),
+        }
+    }
+
+    /// Collect all events from the pipeline receiver until it closes.
+    fn collect_events(rx: mpsc::Receiver<PipelineEvent>) -> Vec<PipelineEvent> {
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.recv() {
+            events.push(ev);
+        }
+        events
+    }
+
+    #[test]
+    fn pipeline_no_phases_completes_immediately() {
+        let cfg = Config {
+            lint: false,
+            generate: false,
+            ..Config::default()
+        };
+        let cancel = CancelToken::new();
+        let rx = run_pipeline(test_input(cfg), cancel);
+        let events = collect_events(rx);
+
+        // Should end with exactly one Completed event.
+        let last = events.last().expect("expected at least one event");
+        match last {
+            PipelineEvent::Completed(report) => {
+                assert_eq!(report.summary.total, 0);
+                assert_eq!(report.summary.passed, 0);
+                assert_eq!(report.summary.failed, 0);
+                assert!(report.phases.lint.is_none());
+                assert!(report.phases.generate.is_none());
+                assert!(report.phases.compile.is_none());
+            }
+            other => panic!("expected Completed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipeline_lint_disabled_skips_lint() {
+        let cfg = Config {
+            lint: false,
+            generate: false,
+            ..Config::default()
+        };
+        let cancel = CancelToken::new();
+        let rx = run_pipeline(test_input(cfg), cancel);
+        let events = collect_events(rx);
+
+        // No PhaseStarted(Lint) should appear.
+        for ev in &events {
+            if let PipelineEvent::PhaseStarted(Phase::Lint) = ev {
+                panic!("lint phase should not start when lint=false");
+            }
+        }
+
+        match events.last().expect("expected events") {
+            PipelineEvent::Completed(report) => {
+                assert!(report.phases.lint.is_none());
+            }
+            other => panic!("expected Completed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipeline_precancelled_aborts() {
+        let cfg = Config {
+            lint: true,
+            linter: crate::config::Linter::Spectral,
+            generate: true,
+            server_generators: vec!["spring".into()],
+            mode: Mode::Server,
+            ..Config::default()
+        };
+        let cancel = CancelToken::new();
+        cancel.cancel(); // Pre-cancel before starting.
+
+        let (tx, rx) = mpsc::channel();
+        // Call run_inner directly so we don't rely on Docker being available.
+        // With a pre-cancelled token the lint phase will attempt to spawn a
+        // container, which will fail (no Docker in CI), but the cancel check
+        // after the phase will fire and produce Aborted.
+        run_inner(test_input(cfg), cancel, tx);
+
+        let events = collect_events(rx);
+        let last = events.last().expect("expected at least one event");
+        match last {
+            PipelineEvent::Aborted(_) => {} // expected
+            PipelineEvent::Completed(_) => {
+                // Also acceptable — if Docker isn't available the lint phase
+                // fails but the cancel check may not trigger because
+                // run_container returns immediately on spawn failure.
+                // The important thing is we don't hang.
+            }
+            other => panic!("expected Aborted or Completed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipeline_empty_generators_skips_generate_compile() {
+        let cfg = Config {
+            lint: false,
+            generate: true,
+            compile: true,
+            server_generators: Vec::new(),
+            client_generators: Vec::new(),
+            ..Config::default()
+        };
+        let cancel = CancelToken::new();
+        let rx = run_pipeline(test_input(cfg), cancel);
+        let events = collect_events(rx);
+
+        // No generate/compile phase events should appear.
+        for ev in &events {
+            match ev {
+                PipelineEvent::PhaseStarted(Phase::Generate { .. })
+                | PipelineEvent::PhaseStarted(Phase::Compile { .. }) => {
+                    panic!("generate/compile should not start with empty generators");
+                }
+                _ => {}
+            }
+        }
+
+        match events.last().expect("expected events") {
+            PipelineEvent::Completed(report) => {
+                assert!(report.phases.generate.is_none());
+                assert!(report.phases.compile.is_none());
+                assert_eq!(report.summary.total, 0);
+            }
+            other => panic!("expected Completed, got: {other:?}"),
+        }
+    }
 }

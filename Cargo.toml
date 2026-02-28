@@ -7,6 +7,10 @@ license = "EUPL-1.2"
 repository = "https://github.com/entur/openapi-validator-tui"
 rust-version = "1.92.0"
 
+[lib]
+name = "lazyoav"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lazyoav"
 path = "src/main.rs"

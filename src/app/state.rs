@@ -1,9 +1,9 @@
 use std::sync::mpsc;
 
-use crate::config::Config;
-use crate::docker::CancelToken;
+use lazyoav::config::Config;
+use lazyoav::docker::CancelToken;
 use crate::log_parser::LintError;
-use crate::pipeline::{PipelineEvent, ValidateReport};
+use lazyoav::pipeline::{PipelineEvent, ValidateReport};
 use crate::spec::SpecIndex;
 
 /// Which panel currently has focus.
@@ -292,7 +292,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::log_parser::Severity;
-    use crate::pipeline::{LintResult, Phases, StepResult, Summary, ValidateReport};
+    use lazyoav::pipeline::{LintResult, Phases, StepResult, Summary, ValidateReport};
 
     fn make_report(
         lint: Option<LintResult>,
