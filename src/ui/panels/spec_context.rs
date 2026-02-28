@@ -60,24 +60,52 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
         return;
     };
 
+    // Determine syntax from file extension.
+    let syntax_name = app
+        .spec_path
+        .as_ref()
+        .and_then(|p| p.extension())
+        .and_then(|ext| ext.to_str())
+        .map(|ext| match ext.to_ascii_lowercase().as_str() {
+            "json" => "JSON",
+            _ => "YAML",
+        })
+        .unwrap_or("YAML");
+
+    // Extract the highlighted spans for the visible window.
+    // Clone the slice so the RefCell borrow is released immediately.
+    let window_highlighted: Vec<Vec<(Style, String)>> = {
+        let mut engine = app.highlight_engine.borrow_mut();
+        let all = engine.highlight_lines(spec_index.lines(), syntax_name);
+        let start_idx = window.start_line - 1;
+        let end_idx = (start_idx + window.lines.len()).min(all.len());
+        all[start_idx..end_idx].to_vec()
+    };
+
     let lines: Vec<Line> = window
         .lines
         .iter()
         .enumerate()
-        .map(|(i, content)| {
+        .map(|(i, _)| {
             let line_num = window.start_line + i;
             let gutter = Span::styled(format!("{line_num:>4} "), Style::default().fg(COLOR_GUTTER));
 
             let is_target = line_num == window.target_line;
-            let content_style = if is_target {
-                Style::default()
-                    .bg(COLOR_SELECTED_BG)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
 
-            Line::from(vec![gutter, Span::styled(content.clone(), content_style)])
+            let mut spans = vec![gutter];
+
+            if let Some(segments) = window_highlighted.get(i) {
+                for (style, text) in segments {
+                    let style = if is_target {
+                        style.bg(COLOR_SELECTED_BG).add_modifier(Modifier::BOLD)
+                    } else {
+                        *style
+                    };
+                    spans.push(Span::styled(text.clone(), style));
+                }
+            }
+
+            Line::from(spans)
         })
         .collect();
 

@@ -25,6 +25,7 @@ serde_yaml = "0.9"
 walkdir = "2.5"
 include_dir = "0.7"
 shell-words = "1.1.1"
+syntect = "5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
