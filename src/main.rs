@@ -79,7 +79,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         {
             match handle_key(&mut app, key) {
                 Action::OpenEditor { path, line } => {
-                    let _ = open_editor(terminal, &mut app, &path, line);
+                    open_editor(terminal, &mut app, &path, line)?;
                 }
                 Action::None => {}
             }
@@ -393,11 +393,21 @@ fn open_editor(
     path: &Path,
     line: usize,
 ) -> Result<()> {
-    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+    let editor_var = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+
+    let parts: Vec<String> = match shell_words::split(&editor_var) {
+        Ok(p) if !p.is_empty() => p,
+        _ => vec![editor_var.clone()],
+    };
+    let program = &parts[0];
+    let extra_args = &parts[1..];
 
     restore_terminal()?;
 
-    let result = Command::new(&editor)
+    let result = Command::new(program)
+        .args(extra_args)
         .arg(format!("+{line}"))
         .arg(path)
         .status();
@@ -405,12 +415,32 @@ fn open_editor(
     // Always re-enter TUI, even if the editor failed.
     *terminal = setup_terminal()?;
 
-    if let Err(e) = result {
-        app.set_status(
-            format!("Failed to open editor: {e}"),
-            StatusLevel::Error,
-        );
-        return Ok(());
+    match result {
+        Err(e) => {
+            app.set_status(
+                format!("Failed to open editor: {e}"),
+                StatusLevel::Error,
+            );
+            return Ok(());
+        }
+        Ok(status) if !status.success() => {
+            let code = status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into());
+            app.set_status(
+                format!("Editor exited with {code} — skipping re-validation"),
+                StatusLevel::Warn,
+            );
+            // Still re-parse the spec (user may have saved before the error).
+            if let Ok(raw) = std::fs::read_to_string(path)
+                && let Ok(index) = spec::parse_spec(&raw)
+            {
+                app.spec_index = Some(index);
+            }
+            return Ok(());
+        }
+        Ok(_) => {}
     }
 
     // Re-read and re-parse the spec (user may have edited it).
