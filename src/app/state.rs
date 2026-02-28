@@ -1,8 +1,9 @@
 use std::sync::mpsc;
 
-use crate::docker::{CancelToken, OutputLine};
+use crate::config::Config;
+use crate::docker::CancelToken;
 use crate::log_parser::LintError;
-use crate::pipeline::ValidateReport;
+use crate::pipeline::{PipelineEvent, ValidateReport};
 use crate::spec::SpecIndex;
 
 /// Which panel currently has focus.
@@ -126,10 +127,15 @@ pub struct App {
     /// Parsed spec index for source mapping.
     pub spec_index: Option<SpecIndex>,
 
-    /// Receiver for streamed container output.
-    pub docker_rx: Option<mpsc::Receiver<OutputLine>>,
-    /// Token to cancel a running container.
+    /// Receiver for pipeline events during validation.
+    pub pipeline_rx: Option<mpsc::Receiver<PipelineEvent>>,
+    /// Token to cancel a running pipeline.
     pub cancel_token: Option<CancelToken>,
+    /// Real-time log output from the active pipeline phase.
+    pub live_log: String,
+
+    /// Loaded config, reused across validation runs.
+    pub config: Option<Config>,
 }
 
 impl App {
@@ -147,8 +153,10 @@ impl App {
             validating: false,
             lint_errors: Vec::new(),
             spec_index: None,
-            docker_rx: None,
+            pipeline_rx: None,
             cancel_token: None,
+            live_log: String::new(),
+            config: None,
         }
     }
 

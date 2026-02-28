@@ -7,7 +7,6 @@ mod docker;
 mod fix;
 #[allow(unused)]
 mod log_parser;
-#[allow(unused)]
 mod pipeline;
 #[allow(unused)]
 mod spec;
@@ -25,7 +24,8 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use app::App;
-use docker::OutputLine;
+use docker::CancelToken;
+use pipeline::{PipelineEvent, PipelineInput};
 
 fn main() -> Result<()> {
     // Ensure terminal is restored on panic.
@@ -64,7 +64,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         terminal.draw(|frame| ui::draw(frame, &app))?;
 
         // Poll for input: use a short timeout while validating (to drain
-        // docker output promptly) and a longer one when idle to save CPU.
+        // pipeline events promptly) and a longer one when idle to save CPU.
         let poll_timeout = if app.validating {
             Duration::from_millis(50)
         } else {
@@ -77,7 +77,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             app.clamp_indices();
         }
 
-        drain_docker_output(&mut app);
+        drain_pipeline_events(&mut app);
     }
 
     Ok(())
@@ -96,6 +96,9 @@ fn load_from_cwd(app: &mut App) {
         Err(_) => return,
     };
 
+    // Load config and store for reuse.
+    let cfg = config::load(&cwd).unwrap_or_default();
+
     // Load report if present.
     let report_path = cwd.join("report.json");
     if let Ok(report_json) = std::fs::read_to_string(&report_path)
@@ -108,7 +111,6 @@ fn load_from_cwd(app: &mut App) {
     }
 
     // Discover and parse spec.
-    let cfg = config::load(&cwd).unwrap_or_default();
     let spec_path = resolve_spec_path(&cwd, &cfg);
     if let Some(path) = spec_path
         && let Ok(raw) = std::fs::read_to_string(&path)
@@ -117,6 +119,7 @@ fn load_from_cwd(app: &mut App) {
         app.spec_index = Some(index);
     }
 
+    app.config = Some(cfg);
     app.clamp_indices();
 }
 
@@ -154,6 +157,18 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         }
         (KeyCode::Char('_'), _) => {
             app.screen_mode = app.screen_mode.cycle_prev();
+            return;
+        }
+        // Run validation pipeline.
+        (KeyCode::Char('r'), _) if !app.validating => {
+            start_pipeline(app);
+            return;
+        }
+        // Cancel running validation.
+        (KeyCode::Esc, _) if app.validating => {
+            if let Some(token) = &app.cancel_token {
+                token.cancel();
+            }
             return;
         }
         _ => {}
@@ -229,18 +244,78 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Drain pending docker output lines without blocking.
-fn drain_docker_output(app: &mut App) {
-    let done = if let Some(rx) = &app.docker_rx {
+/// Start the validation pipeline using the stored config.
+fn start_pipeline(app: &mut App) {
+    let cwd = match std::env::current_dir() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    let cfg = match &app.config {
+        Some(c) => c.clone(),
+        None => {
+            let c = config::load(&cwd).unwrap_or_default();
+            app.config = Some(c.clone());
+            c
+        }
+    };
+
+    let spec_path = match resolve_spec_path(&cwd, &cfg) {
+        Some(p) => p,
+        None => return,
+    };
+
+    let input = PipelineInput {
+        config: cfg,
+        spec_path,
+        work_dir: cwd,
+    };
+
+    let cancel = CancelToken::new();
+    let rx = pipeline::run_pipeline(input, cancel.clone());
+
+    // Clear previous state.
+    app.report = None;
+    app.lint_errors.clear();
+    app.live_log.clear();
+    app.phase_index = 0;
+    app.error_index = 0;
+    app.detail_scroll = 0;
+
+    app.pipeline_rx = Some(rx);
+    app.cancel_token = Some(cancel);
+    app.validating = true;
+}
+
+/// Drain pending pipeline events without blocking.
+fn drain_pipeline_events(app: &mut App) {
+    let done = if let Some(rx) = &app.pipeline_rx {
         let mut finished = false;
-        while let Ok(line) = rx.try_recv() {
-            match line {
-                OutputLine::Stdout(_) | OutputLine::Stderr(_) => {
-                    // TODO: forward to log panel / detail buffer
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                PipelineEvent::PhaseStarted(_) => {
+                    app.live_log.clear();
                 }
-                OutputLine::Done(result) => {
+                PipelineEvent::Log { line, .. } => {
+                    app.live_log.push_str(&line);
+                    app.live_log.push('\n');
+                }
+                PipelineEvent::PhaseFinished { .. } => {}
+                PipelineEvent::Completed(report) => {
+                    if let Some(lint) = &report.phases.lint {
+                        app.lint_errors = log_parser::parse_lint_log(&lint.log);
+                    }
+                    app.report = Some(report);
                     app.validating = false;
-                    let _ = result; // TODO: update app.report from result
+                    app.live_log.clear();
+                    app.clamp_indices();
+                    finished = true;
+                    break;
+                }
+                PipelineEvent::Aborted(reason) => {
+                    app.live_log
+                        .push_str(&format!("\n--- Aborted: {reason} ---\n"));
+                    app.validating = false;
                     finished = true;
                     break;
                 }
@@ -252,7 +327,7 @@ fn drain_docker_output(app: &mut App) {
     };
 
     if done {
-        app.docker_rx = None;
+        app.pipeline_rx = None;
         app.cancel_token = None;
     }
 }
