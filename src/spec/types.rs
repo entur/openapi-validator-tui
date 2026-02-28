@@ -40,7 +40,7 @@ impl SpecIndex {
         }
         let start = line.saturating_sub(radius).max(1);
         let end = (line + radius).min(self.raw_lines.len());
-        let lines = self.raw_lines[start - 1..end].iter().cloned().collect();
+        let lines = self.raw_lines[start - 1..end].to_vec();
         Some(ContextWindow {
             start_line: start,
             lines,

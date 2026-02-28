@@ -57,10 +57,7 @@ pub fn parse_spec(raw: &str) -> Result<SpecIndex> {
 
 /// Count leading ASCII spaces (tabs count as 1 for simplicity).
 fn leading_spaces(line: &str) -> usize {
-    line.len()
-        - line
-            .trim_start_matches(|c: char| c == ' ' || c == '\t')
-            .len()
+    line.len() - line.trim_start_matches([' ', '\t']).len()
 }
 
 /// Extract the YAML key from a trimmed line.
@@ -74,8 +71,8 @@ fn leading_spaces(line: &str) -> usize {
 /// Returns `(key, col_offset)` where col_offset is the byte offset within the
 /// trimmed line at which the key starts (0 for normal keys, 2 for `- key`).
 fn extract_yaml_key(trimmed: &str) -> Option<(String, usize)> {
-    let (effective, col_offset) = if trimmed.starts_with("- ") {
-        (&trimmed[2..], 2)
+    let (effective, col_offset) = if let Some(stripped) = trimmed.strip_prefix("- ") {
+        (stripped, 2)
     } else {
         (trimmed, 0)
     };

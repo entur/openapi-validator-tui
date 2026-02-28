@@ -1,9 +1,15 @@
 mod app;
+#[allow(unused)]
 mod config;
+#[allow(unused)]
 mod docker;
+#[allow(unused)]
 mod fix;
+#[allow(unused)]
 mod log_parser;
+#[allow(unused)]
 mod pipeline;
+#[allow(unused)]
 mod spec;
 mod ui;
 
@@ -66,6 +72,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             && let Event::Key(key) = event::read()?
         {
             handle_key(&mut app, key);
+            app.clamp_indices();
         }
 
         drain_docker_output(&mut app);
@@ -75,7 +82,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) {
-    use app::{Panel, ScreenMode};
+    use app::Panel;
 
     // Global keys.
     match (key.code, key.modifiers) {
@@ -117,16 +124,30 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     match app.focused_panel {
         Panel::Phases => match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                app.phase_index = app.phase_index.saturating_add(1)
+                app.phase_index = app.phase_index.saturating_add(1);
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
             }
-            KeyCode::Up | KeyCode::Char('k') => app.phase_index = app.phase_index.saturating_sub(1),
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.phase_index = app.phase_index.saturating_sub(1);
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
             _ => {}
         },
         Panel::Errors => match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                app.error_index = app.error_index.saturating_add(1)
+                app.error_index = app.error_index.saturating_add(1);
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
             }
-            KeyCode::Up | KeyCode::Char('k') => app.error_index = app.error_index.saturating_sub(1),
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.error_index = app.error_index.saturating_sub(1);
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
             _ => {}
         },
         Panel::Detail => match key.code {
