@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, Panel, ScreenMode, StatusLevel};
+use crate::app::{App, BrowserPanel, Panel, ScreenMode, StatusLevel, ViewMode};
 
 use super::overlay;
 use super::panels;
@@ -18,13 +18,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(size);
 
-    draw_panels(frame, app, outer[0]);
+    match app.view_mode {
+        ViewMode::Validator => draw_panels(frame, app, outer[0]),
+        ViewMode::CodeBrowser => panels::draw_code_browser(frame, app, outer[0]),
+    }
     draw_bottom_bar(frame, app, outer[1]);
 
-    if let Some(ref proposal) = app.fix_proposal {
-        overlay::draw_fix_overlay(frame, proposal, size);
-    } else if app.show_help {
-        overlay::draw_help_overlay(frame, size);
+    if app.view_mode == ViewMode::Validator {
+        if let Some(ref proposal) = app.fix_proposal {
+            overlay::draw_fix_overlay(frame, proposal, size);
+        } else if app.show_help {
+            overlay::draw_help_overlay(frame, size);
+        }
     }
 }
 
@@ -90,17 +95,37 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         push_hint_spans(&mut spans, "?", "help");
         spans
     } else {
-        let mut hints: Vec<(&str, &str)> = match app.focused_panel {
-            Panel::Phases => vec![("j/k", "navigate"), ("Enter", "select"), ("r", "run")],
-            Panel::Errors => vec![
-                ("j/k", "navigate"),
-                ("Enter/d", "detail"),
-                ("e", "edit"),
-                ("f", "fix"),
-                ("r", "run"),
-            ],
-            Panel::Detail => vec![("j/k", "scroll"), ("[/]", "tab")],
-            Panel::SpecContext => vec![("j/k", "scroll")],
+        let mut hints: Vec<(&str, &str)> = if app.view_mode == ViewMode::CodeBrowser {
+            match app.browser.browser_focus {
+                BrowserPanel::FileTree => vec![
+                    ("j/k", "navigate"),
+                    ("Enter", "open"),
+                    ("[/]", "generator"),
+                    ("Tab", "panel"),
+                    ("g", "validator"),
+                ],
+                BrowserPanel::FileContent => {
+                    vec![("j/k", "scroll"), ("Tab", "panel"), ("g", "validator")]
+                }
+            }
+        } else {
+            match app.focused_panel {
+                Panel::Phases => vec![
+                    ("j/k", "navigate"),
+                    ("Enter", "select"),
+                    ("r", "run"),
+                    ("g", "browser"),
+                ],
+                Panel::Errors => vec![
+                    ("j/k", "navigate"),
+                    ("Enter/d", "detail"),
+                    ("e", "edit"),
+                    ("f", "fix"),
+                    ("r", "run"),
+                ],
+                Panel::Detail => vec![("j/k", "scroll"), ("[/]", "tab")],
+                Panel::SpecContext => vec![("j/k", "scroll")],
+            }
         };
         if app.validating {
             hints.push(("Esc", "cancel"));

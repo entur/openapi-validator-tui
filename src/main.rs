@@ -19,7 +19,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use app::{App, Panel, StatusLevel};
+use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::docker::{self, CancelToken};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
@@ -146,7 +146,6 @@ fn load_from_cwd(app: &mut App) {
         && let Ok(index) = spec::parse_spec(&raw)
     {
         app.spec_index = Some(index);
-
     }
 
     if spec_path.is_none() && app.status_message.is_none() {
@@ -196,7 +195,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                                 && let Ok(index) = spec::parse_spec(&raw)
                             {
                                 app.spec_index = Some(index);
-                        
                             }
                             start_pipeline(app);
                             app.set_status("Fix applied, re-validating...", StatusLevel::Info);
@@ -262,7 +260,28 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
             }
             return Action::None;
         }
+        // Toggle between validator and code browser views.
+        (KeyCode::Char('g'), _) => {
+            match app.view_mode {
+                ViewMode::Validator => {
+                    sync_generators_from_report(app);
+                    if let Ok(cwd) = std::env::current_dir() {
+                        app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                    }
+                    app.view_mode = ViewMode::CodeBrowser;
+                }
+                ViewMode::CodeBrowser => {
+                    app.view_mode = ViewMode::Validator;
+                }
+            }
+            return Action::None;
+        }
         _ => {}
+    }
+
+    // Early return for browser-specific keys.
+    if app.view_mode == ViewMode::CodeBrowser {
+        return handle_browser_key(app, key);
     }
 
     // Panel switching.
@@ -503,7 +522,6 @@ fn open_editor(
                 && let Ok(index) = spec::parse_spec(&raw)
             {
                 app.spec_index = Some(index);
-        
             }
             return Ok(());
         }
@@ -515,7 +533,6 @@ fn open_editor(
         && let Ok(index) = spec::parse_spec(&raw)
     {
         app.spec_index = Some(index);
-
     }
 
     // Trigger re-validation.
@@ -630,7 +647,134 @@ fn drain_pipeline_events(app: &mut App) {
     if done {
         app.pipeline_rx = None;
         app.cancel_token = None;
+
+        // If viewing the code browser, refresh to pick up new output.
+        if app.view_mode == ViewMode::CodeBrowser {
+            sync_generators_from_report(app);
+            if let Ok(cwd) = std::env::current_dir() {
+                app::browser::refresh_file_tree(&mut app.browser, &cwd);
+            }
+        }
     }
+}
+
+/// Populate `browser.generators` from the current report's generate phase.
+fn sync_generators_from_report(app: &mut App) {
+    let generators: Vec<(String, String)> = app
+        .report
+        .as_ref()
+        .and_then(|r| r.phases.generate.as_ref())
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|s| (s.generator.clone(), s.scope.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Preserve index if still in range.
+    if app.browser.generator_index >= generators.len() {
+        app.browser.generator_index = 0;
+    }
+    app.browser.generators = generators;
+}
+
+/// Handle keys when the code browser view is active.
+fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
+    match (key.code, key.modifiers) {
+        // Panel focus switching.
+        (KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'), _) => {
+            app.browser.browser_focus = BrowserPanel::FileContent;
+        }
+        (KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h'), _) => {
+            app.browser.browser_focus = BrowserPanel::FileTree;
+        }
+
+        // Generator cycling.
+        (KeyCode::Char(']'), _) => {
+            if !app.browser.generators.is_empty() {
+                app.browser.generator_index =
+                    (app.browser.generator_index + 1) % app.browser.generators.len();
+                if let Ok(cwd) = std::env::current_dir() {
+                    app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                }
+            }
+        }
+        (KeyCode::Char('['), _) => {
+            if !app.browser.generators.is_empty() {
+                let len = app.browser.generators.len();
+                app.browser.generator_index = (app.browser.generator_index + len - 1) % len;
+                if let Ok(cwd) = std::env::current_dir() {
+                    app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                }
+            }
+        }
+
+        // Navigation — dispatched based on focused sub-panel.
+        (KeyCode::Down | KeyCode::Char('j'), _) => match app.browser.browser_focus {
+            BrowserPanel::FileTree => {
+                let max = app.browser.file_tree.len().saturating_sub(1);
+                app.browser.file_index = (app.browser.file_index + 1).min(max);
+            }
+            BrowserPanel::FileContent => {
+                app.browser.file_scroll = app.browser.file_scroll.saturating_add(1);
+            }
+        },
+        (KeyCode::Up | KeyCode::Char('k'), _) => match app.browser.browser_focus {
+            BrowserPanel::FileTree => {
+                app.browser.file_index = app.browser.file_index.saturating_sub(1);
+            }
+            BrowserPanel::FileContent => {
+                app.browser.file_scroll = app.browser.file_scroll.saturating_sub(1);
+            }
+        },
+        (KeyCode::Home, _) => match app.browser.browser_focus {
+            BrowserPanel::FileTree => app.browser.file_index = 0,
+            BrowserPanel::FileContent => app.browser.file_scroll = 0,
+        },
+        (KeyCode::End, _) => match app.browser.browser_focus {
+            BrowserPanel::FileTree => {
+                app.browser.file_index = app.browser.file_tree.len().saturating_sub(1);
+            }
+            BrowserPanel::FileContent => {
+                app.browser.file_scroll = u16::MAX;
+            }
+        },
+        (KeyCode::PageUp, _) => match app.browser.browser_focus {
+            BrowserPanel::FileTree => {
+                app.browser.file_index = app.browser.file_index.saturating_sub(10);
+            }
+            BrowserPanel::FileContent => {
+                app.browser.file_scroll = app.browser.file_scroll.saturating_sub(20);
+            }
+        },
+        (KeyCode::PageDown, _) => match app.browser.browser_focus {
+            BrowserPanel::FileTree => {
+                let max = app.browser.file_tree.len().saturating_sub(1);
+                app.browser.file_index = (app.browser.file_index + 10).min(max);
+            }
+            BrowserPanel::FileContent => {
+                app.browser.file_scroll = app.browser.file_scroll.saturating_add(20);
+            }
+        },
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            app.browser.file_scroll = app.browser.file_scroll.saturating_sub(20);
+        }
+        (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            app.browser.file_scroll = app.browser.file_scroll.saturating_add(20);
+        }
+
+        // Open file.
+        (KeyCode::Enter, _) if app.browser.browser_focus == BrowserPanel::FileTree => {
+            app::browser::load_selected_file(&mut app.browser);
+            if app.browser.file_content.is_some() {
+                app.browser.browser_focus = BrowserPanel::FileContent;
+            }
+        }
+
+        _ => {}
+    }
+    Action::None
 }
 
 #[cfg(test)]
@@ -1180,6 +1324,164 @@ mod tests {
     fn new_app_spec_path_is_none() {
         let app = App::new();
         assert!(app.spec_path.is_none());
+    }
+
+    // ── Code browser toggle ────────────────────────────────────────
+
+    #[test]
+    fn g_toggles_view_mode() {
+        let mut app = App::new();
+        assert_eq!(app.view_mode, ViewMode::Validator);
+
+        handle_key(&mut app, key_char('g'));
+        assert_eq!(app.view_mode, ViewMode::CodeBrowser);
+
+        handle_key(&mut app, key_char('g'));
+        assert_eq!(app.view_mode, ViewMode::Validator);
+    }
+
+    // ── handle_browser_key ──────────────────────────────────────────
+
+    #[test]
+    fn browser_j_k_moves_file_index_in_tree() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::CodeBrowser;
+        app.browser.browser_focus = BrowserPanel::FileTree;
+        app.browser.file_tree = vec![
+            app::state::FileEntry {
+                depth: 0,
+                name: "a".into(),
+                is_dir: false,
+                path: "a".into(),
+            },
+            app::state::FileEntry {
+                depth: 0,
+                name: "b".into(),
+                is_dir: false,
+                path: "b".into(),
+            },
+            app::state::FileEntry {
+                depth: 0,
+                name: "c".into(),
+                is_dir: false,
+                path: "c".into(),
+            },
+        ];
+
+        handle_key(&mut app, key_char('j'));
+        assert_eq!(app.browser.file_index, 1);
+
+        handle_key(&mut app, key_char('j'));
+        assert_eq!(app.browser.file_index, 2);
+
+        // Should clamp at max.
+        handle_key(&mut app, key_char('j'));
+        assert_eq!(app.browser.file_index, 2);
+
+        handle_key(&mut app, key_char('k'));
+        assert_eq!(app.browser.file_index, 1);
+    }
+
+    #[test]
+    fn browser_j_k_scrolls_file_content() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::CodeBrowser;
+        app.browser.browser_focus = BrowserPanel::FileContent;
+
+        handle_key(&mut app, key_char('j'));
+        assert_eq!(app.browser.file_scroll, 1);
+
+        handle_key(&mut app, key_char('k'));
+        assert_eq!(app.browser.file_scroll, 0);
+    }
+
+    #[test]
+    fn browser_brackets_cycle_generator_index() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::CodeBrowser;
+        app.browser.generators = vec![
+            ("go".into(), "server".into()),
+            ("ts".into(), "client".into()),
+            ("java".into(), "server".into()),
+        ];
+        app.browser.generator_index = 0;
+
+        handle_key(&mut app, key_char(']'));
+        assert_eq!(app.browser.generator_index, 1);
+
+        handle_key(&mut app, key_char(']'));
+        assert_eq!(app.browser.generator_index, 2);
+
+        // Wraps around.
+        handle_key(&mut app, key_char(']'));
+        assert_eq!(app.browser.generator_index, 0);
+
+        // Backwards.
+        handle_key(&mut app, key_char('['));
+        assert_eq!(app.browser.generator_index, 2);
+    }
+
+    #[test]
+    fn browser_tab_switches_focus() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::CodeBrowser;
+        app.browser.browser_focus = BrowserPanel::FileTree;
+
+        handle_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.browser.browser_focus, BrowserPanel::FileContent);
+
+        handle_key(&mut app, key(KeyCode::BackTab));
+        assert_eq!(app.browser.browser_focus, BrowserPanel::FileTree);
+    }
+
+    #[test]
+    fn browser_h_l_switches_focus() {
+        let mut app = App::new();
+        app.view_mode = ViewMode::CodeBrowser;
+        app.browser.browser_focus = BrowserPanel::FileTree;
+
+        handle_key(&mut app, key_char('l'));
+        assert_eq!(app.browser.browser_focus, BrowserPanel::FileContent);
+
+        handle_key(&mut app, key_char('h'));
+        assert_eq!(app.browser.browser_focus, BrowserPanel::FileTree);
+    }
+
+    // ── sync_generators_from_report ─────────────────────────────────
+
+    #[test]
+    fn sync_generators_no_report_gives_empty() {
+        let mut app = App::new();
+        sync_generators_from_report(&mut app);
+        assert!(app.browser.generators.is_empty());
+    }
+
+    #[test]
+    fn sync_generators_populates_from_report() {
+        let mut app = App::new();
+        app.report = Some(make_report_with_phases(2));
+        sync_generators_from_report(&mut app);
+        assert_eq!(app.browser.generators.len(), 2);
+        assert_eq!(app.browser.generators[0].0, "gen0");
+        assert_eq!(app.browser.generators[0].1, "server");
+    }
+
+    #[test]
+    fn sync_generators_preserves_index_when_in_range() {
+        let mut app = App::new();
+        app.report = Some(make_report_with_phases(3));
+        app.browser.generator_index = 2;
+        sync_generators_from_report(&mut app);
+        assert_eq!(app.browser.generator_index, 2);
+    }
+
+    #[test]
+    fn sync_generators_resets_index_when_out_of_range() {
+        let mut app = App::new();
+        app.report = Some(make_report_with_phases(2));
+        app.browser.generator_index = 5;
+        sync_generators_from_report(&mut app);
+        assert_eq!(app.browser.generator_index, 0);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

@@ -10,6 +10,73 @@ use lazyoav::config::Config;
 use lazyoav::docker::CancelToken;
 use lazyoav::pipeline::{PipelineEvent, ValidateReport};
 
+/// Top-level view: validator grid or generated code browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Validator,
+    CodeBrowser,
+}
+
+/// Which sub-panel has focus within the code browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserPanel {
+    FileTree,
+    FileContent,
+}
+
+/// A single entry in the flattened file tree.
+pub struct FileEntry {
+    pub depth: usize,
+    pub name: String,
+    pub is_dir: bool,
+    pub path: PathBuf,
+}
+
+/// State for the generated code browser view.
+pub struct CodeBrowserState {
+    /// Available (generator, scope) pairs from the last report.
+    pub generators: Vec<(String, String)>,
+    /// Currently selected generator tab.
+    pub generator_index: usize,
+    /// Flattened file tree for the active generator.
+    pub file_tree: Vec<FileEntry>,
+    /// Selected item in the file tree.
+    pub file_index: usize,
+    /// Loaded file content (lines), if any.
+    pub file_content: Option<Vec<String>>,
+    /// Vertical scroll offset in the file content viewer.
+    pub file_scroll: u16,
+    /// Which sub-panel currently has focus.
+    pub browser_focus: BrowserPanel,
+    /// Monotonic counter incremented on each file load (ensures highlight cache miss).
+    pub content_version: u64,
+    /// Dedicated highlight engine for generated code (separate from spec).
+    pub highlight_engine: RefCell<HighlightEngine>,
+}
+
+impl CodeBrowserState {
+    pub fn new() -> Self {
+        Self {
+            generators: Vec::new(),
+            generator_index: 0,
+            file_tree: Vec::new(),
+            file_index: 0,
+            file_content: None,
+            file_scroll: 0,
+            browser_focus: BrowserPanel::FileTree,
+            content_version: 0,
+            highlight_engine: RefCell::new(HighlightEngine::new()),
+        }
+    }
+
+    /// Returns the `"{generator}-{scope}"` directory name for the active generator.
+    pub fn active_generator_dir(&self) -> Option<String> {
+        self.generators
+            .get(self.generator_index)
+            .map(|(generator, scope)| format!("{generator}-{scope}"))
+    }
+}
+
 /// Which panel currently has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
@@ -126,6 +193,8 @@ pub struct App {
     pub running: bool,
     pub focused_panel: Panel,
     pub screen_mode: ScreenMode,
+    pub view_mode: ViewMode,
+    pub browser: CodeBrowserState,
 
     /// Index of selected item in the phases list.
     pub phase_index: usize,
@@ -181,6 +250,8 @@ impl App {
             running: true,
             focused_panel: Panel::Phases,
             screen_mode: ScreenMode::Normal,
+            view_mode: ViewMode::Validator,
+            browser: CodeBrowserState::new(),
             phase_index: 0,
             error_index: 0,
             detail_scroll: 0,
