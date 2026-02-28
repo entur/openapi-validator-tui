@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::log_parser::LintError;
@@ -151,6 +152,9 @@ pub struct App {
     /// Real-time log output from the active pipeline phase.
     pub live_log: String,
 
+    /// Path to the OpenAPI spec file, if discovered.
+    pub spec_path: Option<PathBuf>,
+
     /// Loaded config, reused across validation runs.
     pub config: Option<Config>,
 
@@ -160,6 +164,8 @@ pub struct App {
     pub show_help: bool,
     /// Whether Docker is available on the host.
     pub docker_available: bool,
+    /// Draw-cycle counter driving the spinner animation.
+    pub tick: usize,
 }
 
 impl App {
@@ -180,10 +186,12 @@ impl App {
             pipeline_rx: None,
             cancel_token: None,
             live_log: String::new(),
+            spec_path: None,
             config: None,
             status_message: None,
             show_help: false,
             docker_available: false,
+            tick: 0,
         }
     }
 
