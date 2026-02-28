@@ -13,7 +13,7 @@ use lazyoav::pipeline::{PipelineEvent, PipelineInput, run_pipeline};
 /// Copy the bundled petstore spec into a temporary work directory.
 fn setup_workdir() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("failed to create tempdir");
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/petstore.yaml");
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/petstore.yaml");
     let dest = dir.path().join("petstore.yaml");
     std::fs::copy(&src, &dest).expect("failed to copy petstore.yaml");
     (dir, dest)

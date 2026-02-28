@@ -23,6 +23,11 @@ pub fn run_pipeline(input: PipelineInput, cancel: CancelToken) -> Receiver<Pipel
 }
 
 fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent>) {
+    if cancel.is_cancelled() {
+        let _ = tx.send(PipelineEvent::Aborted("Cancelled by user".into()));
+        return;
+    }
+
     let cfg = &input.config;
     let mut phases = Phases::default();
     let mut total: usize = 0;
@@ -146,7 +151,7 @@ fn run_steps_parallel(
     tx: &Sender<PipelineEvent>,
     kind: StepKind,
 ) -> Vec<StepResult> {
-    let jobs = cfg.jobs.resolve();
+    let jobs = cfg.jobs.resolve().max(1);
     let mut results = Vec::with_capacity(generators.len());
 
     for chunk in generators.chunks(jobs) {
@@ -240,21 +245,12 @@ fn run_container(
             OutputLine::Stdout(s) | OutputLine::Stderr(s) => {
                 let _ = tx.send(PipelineEvent::Log {
                     phase: phase.clone(),
-                    line: s.clone(),
+                    line: s,
                 });
-                log.push_str(&s);
-                log.push('\n');
             }
             OutputLine::Done(result) => {
-                success = result.success;
-                if result.cancelled {
-                    success = false;
-                }
-                // Prefer the container's accumulated log if our line-by-line
-                // accumulation missed anything.
-                if log.is_empty() {
-                    log = result.log;
-                }
+                success = result.success && !result.cancelled;
+                log = result.log;
                 break;
             }
         }
@@ -443,23 +439,13 @@ mod tests {
         cancel.cancel(); // Pre-cancel before starting.
 
         let (tx, rx) = mpsc::channel();
-        // Call run_inner directly so we don't rely on Docker being available.
-        // With a pre-cancelled token the lint phase will attempt to spawn a
-        // container, which will fail (no Docker in CI), but the cancel check
-        // after the phase will fire and produce Aborted.
         run_inner(test_input(cfg), cancel, tx);
 
         let events = collect_events(rx);
-        let last = events.last().expect("expected at least one event");
-        match last {
-            PipelineEvent::Aborted(_) => {} // expected
-            PipelineEvent::Completed(_) => {
-                // Also acceptable — if Docker isn't available the lint phase
-                // fails but the cancel check may not trigger because
-                // run_container returns immediately on spawn failure.
-                // The important thing is we don't hang.
-            }
-            other => panic!("expected Aborted or Completed, got: {other:?}"),
+        assert_eq!(events.len(), 1, "should emit exactly one event");
+        match &events[0] {
+            PipelineEvent::Aborted(_) => {} // deterministic: early bail
+            other => panic!("expected Aborted, got: {other:?}"),
         }
     }
 
