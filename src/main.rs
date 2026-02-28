@@ -64,6 +64,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     load_from_cwd(&mut app);
 
     while app.running {
+        app.tick = app.tick.wrapping_add(1);
         terminal.draw(|frame| ui::draw(frame, &app))?;
 
         // Poll for input: use a short timeout while validating (to drain
@@ -153,6 +154,12 @@ fn load_from_cwd(app: &mut App) {
 
     app.config = Some(cfg);
     app.clamp_indices();
+
+    // Kick off a live validation if Docker is available — the cached report
+    // stays visible while the pipeline runs, then gets replaced by fresh results.
+    if app.docker_available {
+        start_pipeline(app);
+    }
 }
 
 /// Resolve which spec file to use: explicit config value, or auto-discovery.

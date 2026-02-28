@@ -164,6 +164,8 @@ pub struct App {
     pub show_help: bool,
     /// Whether Docker is available on the host.
     pub docker_available: bool,
+    /// Draw-cycle counter driving the spinner animation.
+    pub tick: usize,
 }
 
 impl App {
@@ -189,6 +191,7 @@ impl App {
             status_message: None,
             show_help: false,
             docker_available: false,
+            tick: 0,
         }
     }
 

@@ -61,8 +61,21 @@ fn draw_panels(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    // 1. Status message takes priority.
-    if let Some(msg) = &app.status_message {
+    // Spinner occupies fixed width on the right when validating.
+    const SPINNER_WIDTH: u16 = 16; // " ⠋ Validating "
+    let spinner_len = if app.validating {
+        SPINNER_WIDTH
+    } else {
+        0
+    };
+
+    let bar_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(spinner_len)])
+        .split(area);
+
+    // ── Left side: status message or context-sensitive hints ──
+    let left_spans = if let Some(msg) = &app.status_message {
         let color = match msg.level {
             StatusLevel::Info => Color::Cyan,
             StatusLevel::Warn => Color::Yellow,
@@ -72,52 +85,57 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::styled(&msg.text, Style::default().fg(color)),
             Span::raw("  "),
         ];
-        push_hint_spans(&mut spans, "?", "help");
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
-    }
-
-    // 2. Validating state.
-    if app.validating {
-        let mut spans = vec![
-            Span::styled("Validating...", Style::default().fg(Color::Yellow)),
-            Span::raw("  "),
-        ];
-        push_hint_spans(&mut spans, "Esc", "cancel");
-        spans.push(Span::raw("  "));
-        push_hint_spans(&mut spans, "?", "help");
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
-    }
-
-    // 3. Normal: context-sensitive hints.
-    let hints: &[(&str, &str)] = match app.focused_panel {
-        Panel::Phases => &[
-            ("j/k", "navigate"),
-            ("Enter", "select"),
-            ("r", "run"),
-            ("?", "help"),
-        ],
-        Panel::Errors => &[
-            ("j/k", "navigate"),
-            ("Enter/d", "detail"),
-            ("e", "edit"),
-            ("r", "run"),
-            ("?", "help"),
-        ],
-        Panel::Detail => &[("j/k", "scroll"), ("[/]", "tab"), ("?", "help")],
-        Panel::SpecContext => &[("j/k", "scroll"), ("?", "help")],
-    };
-
-    let mut spans = Vec::new();
-    for (i, (key, action)) in hints.iter().enumerate() {
-        if i > 0 {
+        if app.validating {
+            push_hint_spans(&mut spans, "Esc", "cancel");
             spans.push(Span::raw("  "));
         }
-        push_hint_spans(&mut spans, key, action);
-    }
+        push_hint_spans(&mut spans, "?", "help");
+        spans
+    } else {
+        let mut hints: Vec<(&str, &str)> = match app.focused_panel {
+            Panel::Phases => vec![
+                ("j/k", "navigate"),
+                ("Enter", "select"),
+                ("r", "run"),
+            ],
+            Panel::Errors => vec![
+                ("j/k", "navigate"),
+                ("Enter/d", "detail"),
+                ("e", "edit"),
+                ("r", "run"),
+            ],
+            Panel::Detail => vec![("j/k", "scroll"), ("[/]", "tab")],
+            Panel::SpecContext => vec![("j/k", "scroll")],
+        };
+        if app.validating {
+            hints.push(("Esc", "cancel"));
+        }
+        hints.push(("?", "help"));
 
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        let mut spans = Vec::new();
+        for (i, (key, action)) in hints.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  "));
+            }
+            push_hint_spans(&mut spans, key, action);
+        }
+        spans
+    };
+    frame.render_widget(Paragraph::new(Line::from(left_spans)), bar_layout[0]);
+
+    // ── Right side: spinner when validating ──
+    if app.validating {
+        const BRAILLE: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let frame_char = BRAILLE[app.tick / 3 % BRAILLE.len()];
+        let spinner = Line::from(Span::styled(
+            format!(" {frame_char} Validating "),
+            Style::default().fg(Color::Yellow),
+        ));
+        frame.render_widget(
+            Paragraph::new(spinner).alignment(ratatui::layout::Alignment::Right),
+            bar_layout[1],
+        );
+    }
 }
 
 fn push_hint_spans<'a>(spans: &mut Vec<Span<'a>>, key: &'a str, action: &'a str) {
