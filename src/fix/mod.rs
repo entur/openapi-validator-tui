@@ -26,22 +26,26 @@ pub struct FixProposal {
 
 /// Try to generate a fix proposal for the given lint error.
 ///
-/// Dispatches on `error.rule` to rule-specific generators. Returns `None` if
-/// the rule is not supported or the error lacks sufficient context.
+/// Returns:
+/// - `Ok(Some(..))` if a fix was successfully generated,
+/// - `Ok(None)` if the rule is not supported or the error lacks context,
+/// - `Err(..)` if reading the spec file failed.
 pub fn propose_fix(
     error: &LintError,
     spec_index: &SpecIndex,
     spec_path: &Path,
-) -> Option<FixProposal> {
+) -> Result<Option<FixProposal>> {
     let lines = read_spec_lines(spec_path)?;
 
-    match error.rule.as_str() {
+    let proposal = match error.rule.as_str() {
         "operation-summary" => rules::propose_operation_summary(error, spec_index, &lines),
         "operation-description" => rules::propose_operation_description(error, spec_index, &lines),
         "info-contact" => rules::propose_info_contact(error, spec_index, &lines),
         "info-license" => rules::propose_info_license(error, spec_index, &lines),
         _ => None,
-    }
+    };
+
+    Ok(proposal)
 }
 
 /// Apply a fix proposal by inserting lines into the spec file.
@@ -74,9 +78,9 @@ pub fn apply_fix(proposal: &FixProposal, spec_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_spec_lines(spec_path: &Path) -> Option<Vec<String>> {
-    let content = std::fs::read_to_string(spec_path).ok()?;
-    Some(content.lines().map(String::from).collect())
+fn read_spec_lines(spec_path: &Path) -> Result<Vec<String>> {
+    let content = std::fs::read_to_string(spec_path)?;
+    Ok(content.lines().map(String::from).collect())
 }
 
 /// Gather context lines around `target_line` (1-based) for a diff preview.
@@ -204,6 +208,6 @@ mod tests {
         let mut f = NamedTempFile::new().unwrap();
         write!(f, "{raw}").unwrap();
 
-        assert!(propose_fix(&error, &index, f.path()).is_none());
+        assert!(propose_fix(&error, &index, f.path()).unwrap().is_none());
     }
 }

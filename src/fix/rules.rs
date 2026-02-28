@@ -7,9 +7,12 @@ use super::{FixProposal, gather_context};
 ///
 /// Scans lines below `parent_line` for the first non-blank child and returns
 /// its whitespace prefix. Falls back to parent indent + 2 spaces.
-fn detect_child_indent(lines: &[String], parent_line: usize) -> String {
-    let parent_idx = parent_line.saturating_sub(1);
-    let parent_indent = leading_whitespace(&lines[parent_idx]);
+fn detect_child_indent(lines: &[String], parent_line: usize) -> Option<String> {
+    if parent_line == 0 {
+        return None;
+    }
+    let parent_idx = parent_line - 1;
+    let parent_indent = leading_whitespace(lines.get(parent_idx)?);
 
     for line in lines.iter().skip(parent_idx + 1) {
         let trimmed = line.trim();
@@ -18,14 +21,14 @@ fn detect_child_indent(lines: &[String], parent_line: usize) -> String {
         }
         let indent = leading_whitespace(line);
         if indent.len() > parent_indent.len() {
-            return indent;
+            return Some(indent);
         }
         // Reached a sibling or parent — no children found.
         break;
     }
 
     // Fallback: parent indent + 2 spaces.
-    format!("{parent_indent}  ")
+    Some(format!("{parent_indent}  "))
 }
 
 fn leading_whitespace(line: &str) -> String {
@@ -54,7 +57,7 @@ fn resolve_operation_context(
     }
 
     // Try to extract operationId from child fields.
-    let child_indent = detect_child_indent(lines, op_line);
+    let child_indent = detect_child_indent(lines, op_line)?;
     let op_id = find_child_field_value(lines, op_line, &child_indent, "operationId")
         .unwrap_or_else(|| {
             // Fall back to the HTTP method as identifier.
@@ -93,9 +96,12 @@ fn find_child_field_value(
 ///
 /// Returns the 1-based line number of the last child (or the parent itself if
 /// no children are found).
-fn last_child_line(lines: &[String], parent_line: usize) -> usize {
-    let parent_idx = parent_line.saturating_sub(1);
-    let parent_indent_len = leading_whitespace(&lines[parent_idx]).len();
+fn last_child_line(lines: &[String], parent_line: usize) -> Option<usize> {
+    if parent_line == 0 {
+        return None;
+    }
+    let parent_idx = parent_line - 1;
+    let parent_indent_len = leading_whitespace(lines.get(parent_idx)?).len();
     let mut last = parent_line;
 
     for (i, line) in lines.iter().enumerate().skip(parent_idx + 1) {
@@ -109,7 +115,7 @@ fn last_child_line(lines: &[String], parent_line: usize) -> usize {
         last = i + 1; // 1-based
     }
 
-    last
+    Some(last)
 }
 
 // ── Rule generators ──────────────────────────────────────────────────────
@@ -120,7 +126,7 @@ pub fn propose_operation_summary(
     lines: &[String],
 ) -> Option<FixProposal> {
     let (op_line, op_id) = resolve_operation_context(error, spec_index, lines)?;
-    let indent = detect_child_indent(lines, op_line);
+    let indent = detect_child_indent(lines, op_line)?;
     let inserted = vec![format!("{indent}summary: \"{op_id} summary\"")];
     let (ctx_before, ctx_after) = gather_context(lines, op_line + 1, 3);
 
@@ -140,7 +146,7 @@ pub fn propose_operation_description(
     lines: &[String],
 ) -> Option<FixProposal> {
     let (op_line, op_id) = resolve_operation_context(error, spec_index, lines)?;
-    let indent = detect_child_indent(lines, op_line);
+    let indent = detect_child_indent(lines, op_line)?;
     let inserted = vec![format!("{indent}description: \"{op_id} description\"")];
     let (ctx_before, ctx_after) = gather_context(lines, op_line + 1, 3);
 
@@ -161,9 +167,9 @@ pub fn propose_info_contact(
 ) -> Option<FixProposal> {
     let span = spec_index.resolve("/info")?;
     let info_line = span.line;
-    let child_indent = detect_child_indent(lines, info_line);
+    let child_indent = detect_child_indent(lines, info_line)?;
     let nested_indent = format!("{child_indent}  ");
-    let target = last_child_line(lines, info_line);
+    let target = last_child_line(lines, info_line)?;
 
     let inserted = vec![
         format!("{child_indent}contact:"),
@@ -189,9 +195,9 @@ pub fn propose_info_license(
 ) -> Option<FixProposal> {
     let span = spec_index.resolve("/info")?;
     let info_line = span.line;
-    let child_indent = detect_child_indent(lines, info_line);
+    let child_indent = detect_child_indent(lines, info_line)?;
     let nested_indent = format!("{child_indent}  ");
-    let target = last_child_line(lines, info_line);
+    let target = last_child_line(lines, info_line)?;
 
     let inserted = vec![
         format!("{child_indent}license:"),
@@ -246,35 +252,49 @@ paths:
     fn detect_child_indent_normal() {
         let lines: Vec<String> = PETSTORE_YAML.lines().map(String::from).collect();
         // info: is line 2 (1-based), children are indented with 2 spaces.
-        assert_eq!(detect_child_indent(&lines, 2), "  ");
+        assert_eq!(detect_child_indent(&lines, 2).unwrap(), "  ");
     }
 
     #[test]
     fn detect_child_indent_deeper() {
         let lines: Vec<String> = PETSTORE_YAML.lines().map(String::from).collect();
         // get: is line 7 (1-based), children are indented with 6 spaces.
-        assert_eq!(detect_child_indent(&lines, 7), "      ");
+        assert_eq!(detect_child_indent(&lines, 7).unwrap(), "      ");
     }
 
     #[test]
     fn detect_child_indent_fallback() {
         let lines = vec!["leaf_key: value".to_string()];
         // No children, so fallback = parent indent (0) + 2.
-        assert_eq!(detect_child_indent(&lines, 1), "  ");
+        assert_eq!(detect_child_indent(&lines, 1).unwrap(), "  ");
+    }
+
+    #[test]
+    fn detect_child_indent_out_of_bounds() {
+        let lines = vec!["key: value".to_string()];
+        assert!(detect_child_indent(&lines, 0).is_none());
+        assert!(detect_child_indent(&lines, 99).is_none());
     }
 
     #[test]
     fn last_child_line_info_block() {
         let lines: Vec<String> = PETSTORE_YAML.lines().map(String::from).collect();
         // info: is line 2, its children are title (3) and version (4).
-        assert_eq!(last_child_line(&lines, 2), 4);
+        assert_eq!(last_child_line(&lines, 2).unwrap(), 4);
     }
 
     #[test]
     fn last_child_line_leaf() {
         let lines: Vec<String> = PETSTORE_YAML.lines().map(String::from).collect();
         // openapi: is line 1, no children.
-        assert_eq!(last_child_line(&lines, 1), 1);
+        assert_eq!(last_child_line(&lines, 1).unwrap(), 1);
+    }
+
+    #[test]
+    fn last_child_line_out_of_bounds() {
+        let lines = vec!["key: value".to_string()];
+        assert!(last_child_line(&lines, 0).is_none());
+        assert!(last_child_line(&lines, 99).is_none());
     }
 
     #[test]

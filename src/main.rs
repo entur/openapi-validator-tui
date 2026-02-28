@@ -387,14 +387,17 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                     return Action::None;
                 };
                 match fix::propose_fix(&error, spec_index, spec_path) {
-                    Some(proposal) => {
+                    Ok(Some(proposal)) => {
                         app.fix_proposal = Some(proposal);
                     }
-                    None => {
+                    Ok(None) => {
                         app.set_status(
                             format!("No auto-fix available for '{}'", error.rule),
                             StatusLevel::Info,
                         );
+                    }
+                    Err(e) => {
+                        app.set_status(format!("Failed to read spec: {e}"), StatusLevel::Error);
                     }
                 }
             }
@@ -1071,6 +1074,99 @@ mod tests {
         // on Docker check, which is fine — we only care about cancel).
         handle_key(&mut app, key_char('r'));
         assert!(token.is_cancelled());
+    }
+
+    // ── Fix workflow keybindings ──────────────────────────────────────
+
+    #[test]
+    fn f_with_no_error_selected_sets_info_status() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+
+        handle_key(&mut app, key_char('f'));
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.level, StatusLevel::Info);
+        assert!(msg.text.contains("No error selected"));
+    }
+
+    #[test]
+    fn f_with_unsupported_rule_sets_status() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(1); // rule-0, no auto-fix
+        app.spec_path = Some(std::path::PathBuf::from("/tmp/nonexistent.yaml"));
+
+        handle_key(&mut app, key_char('f'));
+        // Either "No auto-fix" or "Failed to read" — both set a status.
+        assert!(app.status_message.is_some());
+        assert!(app.fix_proposal.is_none());
+    }
+
+    #[test]
+    fn f_outside_errors_panel_does_not_trigger_fix() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Phases;
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(1);
+
+        handle_key(&mut app, key_char('f'));
+        assert!(app.fix_proposal.is_none());
+    }
+
+    #[test]
+    fn fix_overlay_n_clears_and_advances() {
+        let mut app = App::new();
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(3);
+        app.error_index = 0;
+        app.fix_proposal = Some(fix::FixProposal {
+            rule: "test".into(),
+            description: "test".into(),
+            target_line: 1,
+            context_before: vec![],
+            inserted: vec!["  new".into()],
+            context_after: vec![],
+        });
+
+        handle_key(&mut app, key_char('n'));
+        assert!(app.fix_proposal.is_none());
+        assert_eq!(app.error_index, 1);
+    }
+
+    #[test]
+    fn fix_overlay_esc_clears_without_advancing() {
+        let mut app = App::new();
+        app.error_index = 1;
+        app.fix_proposal = Some(fix::FixProposal {
+            rule: "test".into(),
+            description: "test".into(),
+            target_line: 1,
+            context_before: vec![],
+            inserted: vec!["  new".into()],
+            context_after: vec![],
+        });
+
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert!(app.fix_proposal.is_none());
+        assert_eq!(app.error_index, 1); // unchanged
+    }
+
+    #[test]
+    fn fix_overlay_swallows_other_keys() {
+        let mut app = App::new();
+        app.fix_proposal = Some(fix::FixProposal {
+            rule: "test".into(),
+            description: "test".into(),
+            target_line: 1,
+            context_before: vec![],
+            inserted: vec!["  new".into()],
+            context_after: vec![],
+        });
+
+        // 'j' should not navigate — overlay absorbs it.
+        handle_key(&mut app, key_char('j'));
+        assert!(app.fix_proposal.is_some()); // still open
     }
 
     // ── spec_path storage ───────────────────────────────────────────
