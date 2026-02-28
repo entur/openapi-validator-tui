@@ -101,7 +101,9 @@ pub struct PhaseEntry {
 }
 
 /// Severity level for a transient status message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Ordered by severity: Info < Warn < Error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatusLevel {
     Info,
     Warn,
@@ -186,7 +188,15 @@ impl App {
     }
 
     /// Set a transient status message.
+    ///
+    /// Will not overwrite a message of higher severity — call with the most
+    /// critical issue last and it naturally preserves the worst one.
     pub fn set_status(&mut self, text: impl Into<String>, level: StatusLevel) {
+        if let Some(existing) = &self.status_message
+            && existing.level > level
+        {
+            return;
+        }
         self.status_message = Some(StatusMessage {
             text: text.into(),
             level,

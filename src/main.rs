@@ -85,7 +85,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 /// - A `report.json` in the CWD (parsed as a ValidateReport).
 /// - An OpenAPI spec via config `spec` field, or auto-discovery.
 ///
-/// Surfaces errors via `app.status_message` instead of silently ignoring.
+/// Surfaces Docker and config errors via `app.status_message`.
+/// Report and spec parse failures are silently skipped (they are optional).
 fn load_from_cwd(app: &mut App) {
     let cwd = match std::env::current_dir() {
         Ok(p) => p,
@@ -355,6 +356,8 @@ fn handle_key(app: &mut App, key: KeyEvent) {
 
 /// Start the validation pipeline using the stored config.
 fn start_pipeline(app: &mut App) {
+    // Re-check Docker so we pick up changes since startup.
+    app.docker_available = docker::ensure_available().is_ok();
     if !app.docker_available {
         app.set_status("Cannot validate: Docker not available", StatusLevel::Error);
         return;
@@ -499,6 +502,25 @@ mod tests {
         let msg = app.status_message.as_ref().unwrap();
         assert_eq!(msg.text, "second");
         assert_eq!(msg.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn set_status_preserves_higher_severity() {
+        let mut app = App::new();
+        app.set_status("error", StatusLevel::Error);
+        app.set_status("info", StatusLevel::Info);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "error");
+        assert_eq!(msg.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn set_status_overwrites_equal_severity() {
+        let mut app = App::new();
+        app.set_status("first", StatusLevel::Warn);
+        app.set_status("second", StatusLevel::Warn);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "second");
     }
 
     // ── App::new defaults ────────────────────────────────────────────
@@ -783,16 +805,24 @@ mod tests {
     // ── start_pipeline guards ────────────────────────────────────────
 
     #[test]
-    fn start_pipeline_rejects_without_docker() {
+    fn start_pipeline_refreshes_docker_flag() {
         let mut app = App::new();
         app.docker_available = false;
 
+        // start_pipeline re-checks Docker live — the flag should be
+        // updated to match the actual host state regardless of what
+        // it was before the call.
         start_pipeline(&mut app);
 
-        let msg = app.status_message.as_ref().unwrap();
-        assert_eq!(msg.level, StatusLevel::Error);
-        assert!(msg.text.contains("Docker"));
-        assert!(!app.validating);
+        let host_has_docker = docker::ensure_available().is_ok();
+        assert_eq!(app.docker_available, host_has_docker);
+
+        if !host_has_docker {
+            let msg = app.status_message.as_ref().unwrap();
+            assert_eq!(msg.level, StatusLevel::Error);
+            assert!(msg.text.contains("Docker"));
+            assert!(!app.validating);
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

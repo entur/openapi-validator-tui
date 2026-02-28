@@ -32,7 +32,7 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         ("End / >", Some("Jump to last")),
         ("PgUp", Some("Page up")),
         ("PgDn", Some("Page down")),
-        ("Ctrl+U/D", Some("Half-page scroll")),
+        ("Ctrl+U/D", Some("Half-page (detail/spec)")),
         ("Tab / l", Some("Next panel")),
         ("S-Tab / h", Some("Previous panel")),
         ("1-4", Some("Jump to panel")),
