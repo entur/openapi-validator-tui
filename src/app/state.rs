@@ -1,10 +1,10 @@
 use std::sync::mpsc;
 
+use crate::log_parser::LintError;
+use crate::spec::SpecIndex;
 use lazyoav::config::Config;
 use lazyoav::docker::CancelToken;
-use crate::log_parser::LintError;
 use lazyoav::pipeline::{PipelineEvent, ValidateReport};
-use crate::spec::SpecIndex;
 
 /// Which panel currently has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +100,23 @@ pub struct PhaseEntry {
     pub error_count: usize,
 }
 
+/// Severity level for a transient status message.
+///
+/// Ordered by severity: Info < Warn < Error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StatusLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// A transient message displayed in the bottom bar.
+#[derive(Debug, Clone)]
+pub struct StatusMessage {
+    pub text: String,
+    pub level: StatusLevel,
+}
+
 /// Top-level application state.
 pub struct App {
     pub running: bool,
@@ -136,6 +153,13 @@ pub struct App {
 
     /// Loaded config, reused across validation runs.
     pub config: Option<Config>,
+
+    /// Transient status message for the bottom bar.
+    pub status_message: Option<StatusMessage>,
+    /// Whether to show the help overlay.
+    pub show_help: bool,
+    /// Whether Docker is available on the host.
+    pub docker_available: bool,
 }
 
 impl App {
@@ -157,7 +181,26 @@ impl App {
             cancel_token: None,
             live_log: String::new(),
             config: None,
+            status_message: None,
+            show_help: false,
+            docker_available: false,
         }
+    }
+
+    /// Set a transient status message.
+    ///
+    /// Will not overwrite a message of higher severity — call with the most
+    /// critical issue last and it naturally preserves the worst one.
+    pub fn set_status(&mut self, text: impl Into<String>, level: StatusLevel) {
+        if let Some(existing) = &self.status_message
+            && existing.level > level
+        {
+            return;
+        }
+        self.status_message = Some(StatusMessage {
+            text: text.into(),
+            level,
+        });
     }
 
     /// Number of phases without allocating entry labels.

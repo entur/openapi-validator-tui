@@ -18,9 +18,9 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use app::App;
+use app::{App, StatusLevel};
 use lazyoav::config;
-use lazyoav::docker::CancelToken;
+use lazyoav::docker::{self, CancelToken};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
 
 fn main() -> Result<()> {
@@ -85,15 +85,34 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 /// - A `report.json` in the CWD (parsed as a ValidateReport).
 /// - An OpenAPI spec via config `spec` field, or auto-discovery.
 ///
-/// Silently skips anything that isn't found or can't be parsed.
+/// Surfaces Docker and config errors via `app.status_message`.
+/// Report and spec parse failures are silently skipped (they are optional).
 fn load_from_cwd(app: &mut App) {
     let cwd = match std::env::current_dir() {
         Ok(p) => p,
         Err(_) => return,
     };
 
-    // Load config and store for reuse.
-    let cfg = config::load(&cwd).unwrap_or_default();
+    // Check Docker availability.
+    app.docker_available = docker::ensure_available().is_ok();
+    if !app.docker_available {
+        app.set_status(
+            "Docker not available \u{2014} only cached reports can be viewed",
+            StatusLevel::Warn,
+        );
+    }
+
+    // Load config, surfacing parse errors.
+    let cfg = match config::load(&cwd) {
+        Ok(c) => c,
+        Err(e) => {
+            app.set_status(
+                format!("Config error: {e} \u{2014} using defaults"),
+                StatusLevel::Warn,
+            );
+            config::Config::default()
+        }
+    };
 
     // Load report if present.
     let report_path = cwd.join("report.json");
@@ -108,11 +127,15 @@ fn load_from_cwd(app: &mut App) {
 
     // Discover and parse spec.
     let spec_path = resolve_spec_path(&cwd, &cfg);
-    if let Some(path) = spec_path
-        && let Ok(raw) = std::fs::read_to_string(&path)
+    if let Some(path) = &spec_path
+        && let Ok(raw) = std::fs::read_to_string(path)
         && let Ok(index) = spec::parse_spec(&raw)
     {
         app.spec_index = Some(index);
+    }
+
+    if spec_path.is_none() && app.status_message.is_none() {
+        app.set_status("No OpenAPI spec found", StatusLevel::Info);
     }
 
     app.config = Some(cfg);
@@ -141,10 +164,23 @@ fn resolve_spec_path(cwd: &Path, cfg: &config::Config) -> Option<std::path::Path
 fn handle_key(app: &mut App, key: KeyEvent) {
     use app::Panel;
 
+    // Help overlay: any key dismisses it.
+    if app.show_help {
+        app.show_help = false;
+        return;
+    }
+
+    // Clear transient status on any keypress.
+    app.status_message = None;
+
     // Global keys.
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
             app.running = false;
+            return;
+        }
+        (KeyCode::Char('?'), _) => {
+            app.show_help = true;
             return;
         }
         (KeyCode::Char('+'), _) => {
@@ -191,50 +227,128 @@ fn handle_key(app: &mut App, key: KeyEvent) {
 
     // Panel-specific keys.
     match app.focused_panel {
-        Panel::Phases => match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
+        Panel::Phases => match (key.code, key.modifiers) {
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
                 app.phase_index = app.phase_index.saturating_add(1);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
                 app.phase_index = app.phase_index.saturating_sub(1);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
             }
+            (KeyCode::Home | KeyCode::Char('<'), _) => {
+                app.phase_index = 0;
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::End | KeyCode::Char('>'), _) => {
+                let count = app.phase_count();
+                app.phase_index = count.saturating_sub(1);
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::PageUp, _) => {
+                app.phase_index = app.phase_index.saturating_sub(10);
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::PageDown, _) => {
+                app.phase_index = app.phase_index.saturating_add(10);
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::Enter, _) => {
+                app.focused_panel = Panel::Errors;
+            }
             _ => {}
         },
-        Panel::Errors => match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
+        Panel::Errors => match (key.code, key.modifiers) {
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
                 app.error_index = app.error_index.saturating_add(1);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
                 app.error_index = app.error_index.saturating_sub(1);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
             }
+            (KeyCode::Home | KeyCode::Char('<'), _) => {
+                app.error_index = 0;
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::End | KeyCode::Char('>'), _) => {
+                let count = app.current_errors().len();
+                app.error_index = count.saturating_sub(1);
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::PageUp, _) => {
+                app.error_index = app.error_index.saturating_sub(10);
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::PageDown, _) => {
+                app.error_index = app.error_index.saturating_add(10);
+                app.detail_scroll = 0;
+                app.spec_scroll = 0;
+            }
+            (KeyCode::Enter | KeyCode::Char('d'), _) => {
+                app.focused_panel = Panel::Detail;
+            }
             _ => {}
         },
-        Panel::Detail => match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.detail_scroll = app.detail_scroll.saturating_add(1)
+        Panel::Detail => match (key.code, key.modifiers) {
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
+                app.detail_scroll = app.detail_scroll.saturating_add(1);
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.detail_scroll = app.detail_scroll.saturating_sub(1)
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
+                app.detail_scroll = app.detail_scroll.saturating_sub(1);
             }
-            KeyCode::Char(']') => app.detail_tab = (app.detail_tab + 1) % 3,
-            KeyCode::Char('[') => app.detail_tab = (app.detail_tab + 2) % 3,
+            (KeyCode::Home | KeyCode::Char('<'), _) => {
+                app.detail_scroll = 0;
+            }
+            (KeyCode::End | KeyCode::Char('>'), _) => {
+                app.detail_scroll = u16::MAX;
+            }
+            (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                app.detail_scroll = app.detail_scroll.saturating_sub(20);
+            }
+            (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                app.detail_scroll = app.detail_scroll.saturating_add(20);
+            }
+            (KeyCode::Char(']'), _) => app.detail_tab = (app.detail_tab + 1) % 3,
+            (KeyCode::Char('['), _) => app.detail_tab = (app.detail_tab + 2) % 3,
             _ => {}
         },
-        Panel::SpecContext => match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.spec_scroll = app.spec_scroll.saturating_add(1)
+        Panel::SpecContext => match (key.code, key.modifiers) {
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
+                app.spec_scroll = app.spec_scroll.saturating_add(1);
             }
-            KeyCode::Up | KeyCode::Char('k') => app.spec_scroll = app.spec_scroll.saturating_sub(1),
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
+                app.spec_scroll = app.spec_scroll.saturating_sub(1);
+            }
+            (KeyCode::Home | KeyCode::Char('<'), _) => {
+                app.spec_scroll = 0;
+            }
+            (KeyCode::End | KeyCode::Char('>'), _) => {
+                app.spec_scroll = u16::MAX;
+            }
+            (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                app.spec_scroll = app.spec_scroll.saturating_sub(20);
+            }
+            (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                app.spec_scroll = app.spec_scroll.saturating_add(20);
+            }
             _ => {}
         },
     }
@@ -242,6 +356,13 @@ fn handle_key(app: &mut App, key: KeyEvent) {
 
 /// Start the validation pipeline using the stored config.
 fn start_pipeline(app: &mut App) {
+    // Re-check Docker so we pick up changes since startup.
+    app.docker_available = docker::ensure_available().is_ok();
+    if !app.docker_available {
+        app.set_status("Cannot validate: Docker not available", StatusLevel::Error);
+        return;
+    }
+
     let cwd = match std::env::current_dir() {
         Ok(p) => p,
         Err(_) => return,
@@ -258,7 +379,13 @@ fn start_pipeline(app: &mut App) {
 
     let spec_path = match resolve_spec_path(&cwd, &cfg) {
         Some(p) => p,
-        None => return,
+        None => {
+            app.set_status(
+                "No spec file found \u{2014} configure 'spec' in .oavc",
+                StatusLevel::Error,
+            );
+            return;
+        }
     };
 
     let input = PipelineInput {
@@ -325,5 +452,441 @@ fn drain_pipeline_events(app: &mut App) {
     if done {
         app.pipeline_rx = None;
         app.cancel_token = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use app::{Panel, StatusLevel};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn key_ctrl(c: char) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn key_char(c: char) -> KeyEvent {
+        key(KeyCode::Char(c))
+    }
+
+    // ── set_status ───────────────────────────────────────────────────
+
+    #[test]
+    fn set_status_stores_message() {
+        let mut app = App::new();
+        app.set_status("test message", StatusLevel::Warn);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "test message");
+        assert_eq!(msg.level, StatusLevel::Warn);
+    }
+
+    #[test]
+    fn set_status_overwrites_previous() {
+        let mut app = App::new();
+        app.set_status("first", StatusLevel::Info);
+        app.set_status("second", StatusLevel::Error);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "second");
+        assert_eq!(msg.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn set_status_preserves_higher_severity() {
+        let mut app = App::new();
+        app.set_status("error", StatusLevel::Error);
+        app.set_status("info", StatusLevel::Info);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "error");
+        assert_eq!(msg.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn set_status_overwrites_equal_severity() {
+        let mut app = App::new();
+        app.set_status("first", StatusLevel::Warn);
+        app.set_status("second", StatusLevel::Warn);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.text, "second");
+    }
+
+    // ── App::new defaults ────────────────────────────────────────────
+
+    #[test]
+    fn new_app_defaults() {
+        let app = App::new();
+        assert!(!app.show_help);
+        assert!(!app.docker_available);
+        assert!(app.status_message.is_none());
+    }
+
+    // ── Help overlay ─────────────────────────────────────────────────
+
+    #[test]
+    fn question_mark_toggles_help() {
+        let mut app = App::new();
+        assert!(!app.show_help);
+
+        handle_key(&mut app, key_char('?'));
+        assert!(app.show_help);
+    }
+
+    #[test]
+    fn any_key_dismisses_help() {
+        let mut app = App::new();
+        app.show_help = true;
+
+        handle_key(&mut app, key_char('j'));
+        assert!(!app.show_help);
+        // The 'j' should NOT have moved anything — it was consumed by dismiss.
+        assert_eq!(app.phase_index, 0);
+    }
+
+    // ── Status clear on keypress ─────────────────────────────────────
+
+    #[test]
+    fn keypress_clears_status_message() {
+        let mut app = App::new();
+        app.set_status("something", StatusLevel::Info);
+
+        handle_key(&mut app, key_char('j'));
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn help_dismiss_does_not_clear_status() {
+        let mut app = App::new();
+        app.show_help = true;
+        app.set_status("keep me", StatusLevel::Warn);
+
+        handle_key(&mut app, key_char('x'));
+        // Help was dismissed but status should still be there
+        // because the help-dismiss path returns early.
+        assert!(app.status_message.is_some());
+    }
+
+    // ── Phases panel navigation ──────────────────────────────────────
+
+    #[test]
+    fn phases_home_jumps_to_zero() {
+        let mut app = App::new();
+        app.phase_index = 5;
+
+        handle_key(&mut app, key(KeyCode::Home));
+        assert_eq!(app.phase_index, 0);
+    }
+
+    #[test]
+    fn phases_end_jumps_to_last() {
+        let mut app = App::new();
+        // Need a report so phase_count > 0.
+        app.report = Some(make_report_with_phases(3));
+        app.phase_index = 0;
+
+        handle_key(&mut app, key(KeyCode::End));
+        app.clamp_indices();
+        assert_eq!(app.phase_index, 2);
+    }
+
+    #[test]
+    fn phases_less_than_jumps_to_zero() {
+        let mut app = App::new();
+        app.phase_index = 5;
+
+        handle_key(&mut app, key_char('<'));
+        assert_eq!(app.phase_index, 0);
+    }
+
+    #[test]
+    fn phases_greater_than_jumps_to_last() {
+        let mut app = App::new();
+        app.report = Some(make_report_with_phases(3));
+        app.phase_index = 0;
+
+        handle_key(&mut app, key_char('>'));
+        app.clamp_indices();
+        assert_eq!(app.phase_index, 2);
+    }
+
+    #[test]
+    fn phases_page_down_adds_ten() {
+        let mut app = App::new();
+        app.phase_index = 0;
+
+        handle_key(&mut app, key(KeyCode::PageDown));
+        assert_eq!(app.phase_index, 10);
+    }
+
+    #[test]
+    fn phases_page_up_subs_ten() {
+        let mut app = App::new();
+        app.phase_index = 15;
+
+        handle_key(&mut app, key(KeyCode::PageUp));
+        assert_eq!(app.phase_index, 5);
+    }
+
+    #[test]
+    fn phases_page_up_saturates_at_zero() {
+        let mut app = App::new();
+        app.phase_index = 3;
+
+        handle_key(&mut app, key(KeyCode::PageUp));
+        assert_eq!(app.phase_index, 0);
+    }
+
+    #[test]
+    fn phases_enter_focuses_errors() {
+        let mut app = App::new();
+        assert_eq!(app.focused_panel, Panel::Phases);
+
+        handle_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.focused_panel, Panel::Errors);
+    }
+
+    // ── Errors panel navigation ──────────────────────────────────────
+
+    #[test]
+    fn errors_home_jumps_to_zero() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        app.error_index = 5;
+
+        handle_key(&mut app, key(KeyCode::Home));
+        assert_eq!(app.error_index, 0);
+    }
+
+    #[test]
+    fn errors_end_jumps_to_last() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(5);
+        app.error_index = 0;
+
+        handle_key(&mut app, key(KeyCode::End));
+        app.clamp_indices();
+        assert_eq!(app.error_index, 4);
+    }
+
+    #[test]
+    fn errors_page_down() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        app.error_index = 2;
+
+        handle_key(&mut app, key(KeyCode::PageDown));
+        assert_eq!(app.error_index, 12);
+    }
+
+    #[test]
+    fn errors_d_focuses_detail() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+
+        handle_key(&mut app, key_char('d'));
+        assert_eq!(app.focused_panel, Panel::Detail);
+    }
+
+    #[test]
+    fn errors_enter_focuses_detail() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+
+        handle_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.focused_panel, Panel::Detail);
+    }
+
+    // ── Detail panel scroll ──────────────────────────────────────────
+
+    #[test]
+    fn detail_home_resets_scroll() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Detail;
+        app.detail_scroll = 50;
+
+        handle_key(&mut app, key(KeyCode::Home));
+        assert_eq!(app.detail_scroll, 0);
+    }
+
+    #[test]
+    fn detail_end_sets_max_scroll() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Detail;
+
+        handle_key(&mut app, key(KeyCode::End));
+        assert_eq!(app.detail_scroll, u16::MAX);
+    }
+
+    #[test]
+    fn detail_page_up_subs_twenty() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Detail;
+        app.detail_scroll = 50;
+
+        handle_key(&mut app, key(KeyCode::PageUp));
+        assert_eq!(app.detail_scroll, 30);
+    }
+
+    #[test]
+    fn detail_ctrl_d_adds_twenty() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Detail;
+        app.detail_scroll = 10;
+
+        handle_key(&mut app, key_ctrl('d'));
+        assert_eq!(app.detail_scroll, 30);
+    }
+
+    #[test]
+    fn detail_ctrl_u_subs_twenty() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Detail;
+        app.detail_scroll = 25;
+
+        handle_key(&mut app, key_ctrl('u'));
+        assert_eq!(app.detail_scroll, 5);
+    }
+
+    // ── SpecContext panel scroll ─────────────────────────────────────
+
+    #[test]
+    fn spec_home_resets_scroll() {
+        let mut app = App::new();
+        app.focused_panel = Panel::SpecContext;
+        app.spec_scroll = 40;
+
+        handle_key(&mut app, key(KeyCode::Home));
+        assert_eq!(app.spec_scroll, 0);
+    }
+
+    #[test]
+    fn spec_end_sets_max_scroll() {
+        let mut app = App::new();
+        app.focused_panel = Panel::SpecContext;
+
+        handle_key(&mut app, key(KeyCode::End));
+        assert_eq!(app.spec_scroll, u16::MAX);
+    }
+
+    #[test]
+    fn spec_ctrl_d_adds_twenty() {
+        let mut app = App::new();
+        app.focused_panel = Panel::SpecContext;
+        app.spec_scroll = 5;
+
+        handle_key(&mut app, key_ctrl('d'));
+        assert_eq!(app.spec_scroll, 25);
+    }
+
+    #[test]
+    fn spec_page_up_subs_twenty() {
+        let mut app = App::new();
+        app.focused_panel = Panel::SpecContext;
+        app.spec_scroll = 30;
+
+        handle_key(&mut app, key(KeyCode::PageUp));
+        assert_eq!(app.spec_scroll, 10);
+    }
+
+    // ── start_pipeline guards ────────────────────────────────────────
+
+    #[test]
+    fn start_pipeline_refreshes_docker_flag() {
+        let mut app = App::new();
+        app.docker_available = false;
+
+        // start_pipeline re-checks Docker live — the flag should be
+        // updated to match the actual host state regardless of what
+        // it was before the call.
+        start_pipeline(&mut app);
+
+        let host_has_docker = docker::ensure_available().is_ok();
+        assert_eq!(app.docker_available, host_has_docker);
+
+        if !host_has_docker {
+            let msg = app.status_message.as_ref().unwrap();
+            assert_eq!(msg.level, StatusLevel::Error);
+            assert!(msg.text.contains("Docker"));
+            assert!(!app.validating);
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    /// Build a report with `n` generate steps (so phase_count == n).
+    fn make_report_with_phases(n: usize) -> pipeline::ValidateReport {
+        use lazyoav::pipeline::{Phases, StepResult, Summary};
+        let steps: Vec<StepResult> = (0..n)
+            .map(|i| StepResult {
+                generator: format!("gen{i}"),
+                scope: "server".into(),
+                status: "pass".into(),
+                log: String::new(),
+            })
+            .collect();
+        pipeline::ValidateReport {
+            spec: "test.yaml".into(),
+            mode: "both".into(),
+            phases: Phases {
+                lint: None,
+                generate: Some(steps),
+                compile: None,
+            },
+            summary: Summary {
+                total: n,
+                passed: n,
+                failed: 0,
+            },
+        }
+    }
+
+    /// Build a report with a lint phase so current_errors works.
+    fn make_report_with_lint() -> pipeline::ValidateReport {
+        use lazyoav::pipeline::{LintResult, Phases, Summary};
+        pipeline::ValidateReport {
+            spec: "test.yaml".into(),
+            mode: "both".into(),
+            phases: Phases {
+                lint: Some(LintResult {
+                    linter: "spectral".into(),
+                    status: "fail".into(),
+                    log: String::new(),
+                }),
+                generate: None,
+                compile: None,
+            },
+            summary: Summary {
+                total: 1,
+                passed: 0,
+                failed: 1,
+            },
+        }
+    }
+
+    fn make_lint_errors(n: usize) -> Vec<log_parser::LintError> {
+        (0..n)
+            .map(|i| log_parser::LintError {
+                line: i + 1,
+                col: 1,
+                severity: log_parser::Severity::Error,
+                rule: format!("rule-{i}"),
+                message: format!("error {i}"),
+                json_path: None,
+            })
+            .collect()
     }
 }

@@ -53,7 +53,10 @@ fn spectral_lint_petstore() {
     let last = events.last().expect("expected at least one event");
     match last {
         PipelineEvent::Completed(report) => {
-            assert!(report.phases.lint.is_some(), "lint phase should be populated");
+            assert!(
+                report.phases.lint.is_some(),
+                "lint phase should be populated"
+            );
             let lint = report.phases.lint.as_ref().unwrap();
             assert_eq!(lint.linter, "spectral");
             assert!(
@@ -198,7 +201,10 @@ fn cancel_mid_pipeline() {
         }
     }
 
-    assert!(got_phase_started, "should have received at least one PhaseStarted");
+    assert!(
+        got_phase_started,
+        "should have received at least one PhaseStarted"
+    );
 
     let last = events.last().expect("expected events");
     match last {

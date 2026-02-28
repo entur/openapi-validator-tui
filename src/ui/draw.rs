@@ -4,8 +4,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, Panel, ScreenMode};
+use crate::app::{App, Panel, ScreenMode, StatusLevel};
 
+use super::overlay;
 use super::panels;
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -19,6 +20,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     draw_panels(frame, app, outer[0]);
     draw_bottom_bar(frame, app, outer[1]);
+
+    if app.show_help {
+        overlay::draw_help_overlay(frame, size);
+    }
 }
 
 fn draw_panels(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -56,21 +61,51 @@ fn draw_panels(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let hints = match app.focused_panel {
+    // 1. Status message takes priority.
+    if let Some(msg) = &app.status_message {
+        let color = match msg.level {
+            StatusLevel::Info => Color::Cyan,
+            StatusLevel::Warn => Color::Yellow,
+            StatusLevel::Error => Color::Red,
+        };
+        let mut spans = vec![
+            Span::styled(&msg.text, Style::default().fg(color)),
+            Span::raw("  "),
+        ];
+        push_hint_spans(&mut spans, "?", "help");
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
+    // 2. Validating state.
+    if app.validating {
+        let mut spans = vec![
+            Span::styled("Validating...", Style::default().fg(Color::Yellow)),
+            Span::raw("  "),
+        ];
+        push_hint_spans(&mut spans, "Esc", "cancel");
+        spans.push(Span::raw("  "));
+        push_hint_spans(&mut spans, "?", "help");
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
+    // 3. Normal: context-sensitive hints.
+    let hints: &[(&str, &str)] = match app.focused_panel {
         Panel::Phases => &[
             ("j/k", "navigate"),
-            ("Tab", "next panel"),
-            ("+/_", "resize"),
-            ("q", "quit"),
-        ][..],
-        Panel::Errors => &[("j/k", "navigate"), ("Tab", "next panel"), ("q", "quit")][..],
-        Panel::Detail => &[
-            ("j/k", "scroll"),
-            ("[/]", "tab"),
-            ("Tab", "next panel"),
-            ("q", "quit"),
-        ][..],
-        Panel::SpecContext => &[("j/k", "scroll"), ("Tab", "next panel"), ("q", "quit")][..],
+            ("Enter", "select"),
+            ("r", "run"),
+            ("?", "help"),
+        ],
+        Panel::Errors => &[
+            ("j/k", "navigate"),
+            ("Enter/d", "detail"),
+            ("r", "run"),
+            ("?", "help"),
+        ],
+        Panel::Detail => &[("j/k", "scroll"), ("[/]", "tab"), ("?", "help")],
+        Panel::SpecContext => &[("j/k", "scroll"), ("?", "help")],
     };
 
     let mut spans = Vec::new();
@@ -78,18 +113,21 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         if i > 0 {
             spans.push(Span::raw("  "));
         }
-        spans.push(Span::styled(
-            format!("[{key}]"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!(" {action}"),
-            Style::default().fg(Color::DarkGray),
-        ));
+        push_hint_spans(&mut spans, key, action);
     }
 
-    let bar = Paragraph::new(Line::from(spans));
-    frame.render_widget(bar, area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn push_hint_spans<'a>(spans: &mut Vec<Span<'a>>, key: &'a str, action: &'a str) {
+    spans.push(Span::styled(
+        format!("[{key}]"),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        format!(" {action}"),
+        Style::default().fg(Color::DarkGray),
+    ));
 }
