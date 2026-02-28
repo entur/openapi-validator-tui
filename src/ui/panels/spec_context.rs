@@ -75,7 +75,7 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
     // Hold the engine borrow through span construction and render so we can
     // reference cached Strings directly (via Cow::Borrowed) instead of cloning.
     let mut engine = app.highlight_engine.borrow_mut();
-    let all_highlighted = engine.highlight_lines(spec_index.lines(), syntax_name);
+    let all_highlighted = engine.highlight_lines(spec_index.lines(), syntax_name, spec_index.version());
     let start_idx = window.start_line - 1;
 
     let lines: Vec<Line> = window

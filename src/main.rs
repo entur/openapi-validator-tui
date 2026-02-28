@@ -146,7 +146,7 @@ fn load_from_cwd(app: &mut App) {
         && let Ok(index) = spec::parse_spec(&raw)
     {
         app.spec_index = Some(index);
-        app.highlight_engine.borrow_mut().invalidate();
+
     }
 
     if spec_path.is_none() && app.status_message.is_none() {
@@ -196,7 +196,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                                 && let Ok(index) = spec::parse_spec(&raw)
                             {
                                 app.spec_index = Some(index);
-                                app.highlight_engine.borrow_mut().invalidate();
+                        
                             }
                             start_pipeline(app);
                             app.set_status("Fix applied, re-validating...", StatusLevel::Info);
@@ -503,7 +503,7 @@ fn open_editor(
                 && let Ok(index) = spec::parse_spec(&raw)
             {
                 app.spec_index = Some(index);
-                app.highlight_engine.borrow_mut().invalidate();
+        
             }
             return Ok(());
         }
@@ -515,7 +515,7 @@ fn open_editor(
         && let Ok(index) = spec::parse_spec(&raw)
     {
         app.spec_index = Some(index);
-        app.highlight_engine.borrow_mut().invalidate();
+
     }
 
     // Trigger re-validation.
