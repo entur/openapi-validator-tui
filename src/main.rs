@@ -8,7 +8,8 @@ mod spec;
 mod ui;
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -18,10 +19,16 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use app::{App, StatusLevel};
+use app::{App, Panel, StatusLevel};
 use lazyoav::config;
 use lazyoav::docker::{self, CancelToken};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
+
+/// Action returned by `handle_key` to signal the run loop.
+enum Action {
+    None,
+    OpenEditor { path: PathBuf, line: usize },
+}
 
 fn main() -> Result<()> {
     // Ensure terminal is restored on panic.
@@ -69,7 +76,12 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         if event::poll(poll_timeout)?
             && let Event::Key(key) = event::read()?
         {
-            handle_key(&mut app, key);
+            match handle_key(&mut app, key) {
+                Action::OpenEditor { path, line } => {
+                    let _ = open_editor(terminal, &mut app, &path, line);
+                }
+                Action::None => {}
+            }
             app.clamp_indices();
         }
 
@@ -127,6 +139,7 @@ fn load_from_cwd(app: &mut App) {
 
     // Discover and parse spec.
     let spec_path = resolve_spec_path(&cwd, &cfg);
+    app.spec_path = spec_path.clone();
     if let Some(path) = &spec_path
         && let Ok(raw) = std::fs::read_to_string(path)
         && let Ok(index) = spec::parse_spec(&raw)
@@ -161,13 +174,11 @@ fn resolve_spec_path(cwd: &Path, cfg: &config::Config) -> Option<std::path::Path
     None
 }
 
-fn handle_key(app: &mut App, key: KeyEvent) {
-    use app::Panel;
-
+fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     // Help overlay: any key dismisses it.
     if app.show_help {
         app.show_help = false;
-        return;
+        return Action::None;
     }
 
     // Clear transient status on any keypress.
@@ -177,31 +188,31 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
             app.running = false;
-            return;
+            return Action::None;
         }
         (KeyCode::Char('?'), _) => {
             app.show_help = true;
-            return;
+            return Action::None;
         }
         (KeyCode::Char('+'), _) => {
             app.screen_mode = app.screen_mode.cycle_next();
-            return;
+            return Action::None;
         }
         (KeyCode::Char('_'), _) => {
             app.screen_mode = app.screen_mode.cycle_prev();
-            return;
+            return Action::None;
         }
-        // Run validation pipeline.
-        (KeyCode::Char('r'), _) if !app.validating => {
+        // Run validation pipeline (cancels any in-progress run).
+        (KeyCode::Char('r'), _) => {
             start_pipeline(app);
-            return;
+            return Action::None;
         }
         // Cancel running validation.
         (KeyCode::Esc, _) if app.validating => {
             if let Some(token) = &app.cancel_token {
                 token.cancel();
             }
-            return;
+            return Action::None;
         }
         _ => {}
     }
@@ -210,17 +221,17 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
             app.focused_panel = app.focused_panel.next();
-            return;
+            return Action::None;
         }
         KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
             app.focused_panel = app.focused_panel.prev();
-            return;
+            return Action::None;
         }
         KeyCode::Char(c @ '1'..='4') => {
             if let Some(panel) = Panel::from_index((c as usize) - ('1' as usize)) {
                 app.focused_panel = panel;
             }
-            return;
+            return Action::None;
         }
         _ => {}
     }
@@ -305,6 +316,18 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             (KeyCode::Enter | KeyCode::Char('d'), _) => {
                 app.focused_panel = Panel::Detail;
             }
+            (KeyCode::Char('e'), _) => {
+                let Some(error) = app.selected_error() else {
+                    app.set_status("No error selected", StatusLevel::Info);
+                    return Action::None;
+                };
+                let line = error.line;
+                let Some(path) = app.spec_path.clone() else {
+                    app.set_status("No spec file found", StatusLevel::Error);
+                    return Action::None;
+                };
+                return Action::OpenEditor { path, line };
+            }
             _ => {}
         },
         Panel::Detail => match (key.code, key.modifiers) {
@@ -352,10 +375,58 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             _ => {}
         },
     }
+
+    Action::None
+}
+
+/// Suspend the TUI, open `$EDITOR` at the given line, then resume.
+fn open_editor(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    path: &Path,
+    line: usize,
+) -> Result<()> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+
+    restore_terminal()?;
+
+    let result = Command::new(&editor)
+        .arg(format!("+{line}"))
+        .arg(path)
+        .status();
+
+    // Always re-enter TUI, even if the editor failed.
+    *terminal = setup_terminal()?;
+
+    if let Err(e) = result {
+        app.set_status(
+            format!("Failed to open editor: {e}"),
+            StatusLevel::Error,
+        );
+        return Ok(());
+    }
+
+    // Re-read and re-parse the spec (user may have edited it).
+    if let Ok(raw) = std::fs::read_to_string(path)
+        && let Ok(index) = spec::parse_spec(&raw)
+    {
+        app.spec_index = Some(index);
+    }
+
+    // Trigger re-validation.
+    start_pipeline(app);
+    app.set_status("Re-validating after edit...", StatusLevel::Info);
+
+    Ok(())
 }
 
 /// Start the validation pipeline using the stored config.
 fn start_pipeline(app: &mut App) {
+    // Cancel any in-progress pipeline before starting a new one.
+    if let Some(token) = &app.cancel_token {
+        token.cancel();
+    }
+
     // Re-check Docker so we pick up changes since startup.
     app.docker_available = docker::ensure_available().is_ok();
     if !app.docker_available {
@@ -387,6 +458,8 @@ fn start_pipeline(app: &mut App) {
             return;
         }
     };
+
+    app.spec_path = Some(spec_path.clone());
 
     let input = PipelineInput {
         config: cfg,
@@ -458,7 +531,7 @@ fn drain_pipeline_events(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app::{Panel, StatusLevel};
+    use app::StatusLevel;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -823,6 +896,92 @@ mod tests {
             assert!(msg.text.contains("Docker"));
             assert!(!app.validating);
         }
+    }
+
+    // ── Editor keybinding (e) ─────────────────────────────────────────
+
+    #[test]
+    fn e_with_no_error_selected_sets_info_status() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        // No report/errors, so selected_error() is None.
+
+        let action = handle_key(&mut app, key_char('e'));
+        assert!(matches!(action, Action::None));
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.level, StatusLevel::Info);
+        assert!(msg.text.contains("No error selected"));
+    }
+
+    #[test]
+    fn e_with_error_but_no_spec_path_sets_error_status() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(3);
+        app.error_index = 0;
+        // spec_path is None.
+
+        let action = handle_key(&mut app, key_char('e'));
+        assert!(matches!(action, Action::None));
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.level, StatusLevel::Error);
+        assert!(msg.text.contains("No spec file"));
+    }
+
+    #[test]
+    fn e_with_error_and_spec_path_returns_open_editor() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Errors;
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(3);
+        app.error_index = 1; // line = 2
+        app.spec_path = Some(PathBuf::from("/tmp/spec.yaml"));
+
+        let action = handle_key(&mut app, key_char('e'));
+        match action {
+            Action::OpenEditor { path, line } => {
+                assert_eq!(path, PathBuf::from("/tmp/spec.yaml"));
+                assert_eq!(line, 2);
+            }
+            Action::None => panic!("expected OpenEditor action"),
+        }
+    }
+
+    #[test]
+    fn e_outside_errors_panel_does_not_trigger_editor() {
+        let mut app = App::new();
+        app.focused_panel = Panel::Phases;
+        app.report = Some(make_report_with_lint());
+        app.lint_errors = make_lint_errors(1);
+        app.spec_path = Some(PathBuf::from("/tmp/spec.yaml"));
+
+        let action = handle_key(&mut app, key_char('e'));
+        assert!(matches!(action, Action::None));
+        assert!(app.status_message.is_none());
+    }
+
+    // ── Cancel-on-re-run (#9) ───────────────────────────────────────
+
+    #[test]
+    fn r_while_validating_cancels_existing_pipeline() {
+        let mut app = App::new();
+        let token = CancelToken::new();
+        app.cancel_token = Some(token.clone());
+        app.validating = true;
+
+        // r triggers start_pipeline which cancels first (then fails
+        // on Docker check, which is fine — we only care about cancel).
+        handle_key(&mut app, key_char('r'));
+        assert!(token.is_cancelled());
+    }
+
+    // ── spec_path storage ───────────────────────────────────────────
+
+    #[test]
+    fn new_app_spec_path_is_none() {
+        let app = App::new();
+        assert!(app.spec_path.is_none());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

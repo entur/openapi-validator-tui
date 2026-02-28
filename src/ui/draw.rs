@@ -101,6 +101,7 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Panel::Errors => &[
             ("j/k", "navigate"),
             ("Enter/d", "detail"),
+            ("e", "edit"),
             ("r", "run"),
             ("?", "help"),
         ],

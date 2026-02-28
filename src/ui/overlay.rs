@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 /// Draw the help overlay centered on the screen.
 pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(62, 24, area);
+    let popup = centered_rect(62, 25, area);
 
     frame.render_widget(Clear, popup);
 
@@ -42,6 +42,7 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         ("Actions", None),
         ("Enter", Some("Select / focus next")),
         ("d", Some("Jump to detail")),
+        ("e", Some("Open in $EDITOR")),
         ("r", Some("Run validation")),
         ("Esc", Some("Cancel validation")),
         ("+", Some("Expand layout")),
@@ -49,7 +50,6 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         ("[/]", Some("Switch detail tab")),
         ("q", Some("Quit")),
         ("?", Some("Toggle this help")),
-        ("", None),
     ]);
 
     let dismiss = vec![Line::from(Span::styled(
