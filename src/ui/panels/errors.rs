@@ -7,6 +7,16 @@ use ratatui::widgets::{List, ListItem, ListState};
 use crate::app::App;
 use crate::ui::style::{COLOR_SELECTED_BG, ICON_SEVERITY, make_block, severity_color};
 
+/// Truncate a string to at most `max` characters, appending "…" if shortened.
+fn truncate_chars(s: &str, max: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max || max == 0 {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}
+
 pub fn draw_errors(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let block = make_block("Errors", focused);
     let errors = app.current_errors();
@@ -35,21 +45,13 @@ pub fn draw_errors(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
         .map(|(i, err)| {
             let sev_color = severity_color(err.severity);
 
-            // Truncate rule to ~20 chars.
-            let rule_display: String = if err.rule.len() > 20 {
-                format!("{}…", &err.rule[..19])
-            } else {
-                err.rule.clone()
-            };
+            // Truncate rule to ~20 chars (char-safe).
+            let rule_display: String = truncate_chars(&err.rule, 20);
 
             // "● rule_id  " takes up prefix_len chars.
-            let prefix_len = 2 + rule_display.len() + 2; // icon+space + rule + 2 spaces
+            let prefix_len = 2 + rule_display.chars().count() + 2; // icon+space + rule + 2 spaces
             let msg_budget = inner_width.saturating_sub(prefix_len);
-            let msg_display: String = if err.message.len() > msg_budget && msg_budget > 1 {
-                format!("{}…", &err.message[..msg_budget.saturating_sub(1)])
-            } else {
-                err.message.clone()
-            };
+            let msg_display: String = truncate_chars(&err.message, msg_budget);
 
             let spans = vec![
                 Span::styled(format!("{ICON_SEVERITY} "), Style::default().fg(sev_color)),

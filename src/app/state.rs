@@ -152,6 +152,24 @@ impl App {
         }
     }
 
+    /// Number of phases without allocating entry labels.
+    pub fn phase_count(&self) -> usize {
+        let Some(report) = &self.report else {
+            return 0;
+        };
+        let mut count = 0;
+        if report.phases.lint.is_some() {
+            count += 1;
+        }
+        if let Some(steps) = &report.phases.generate {
+            count += steps.len();
+        }
+        if let Some(steps) = &report.phases.compile {
+            count += steps.len();
+        }
+        count
+    }
+
     /// Build the list of phase entries from the current report.
     pub fn phase_entries(&self) -> Vec<PhaseEntry> {
         let Some(report) = &self.report else {
@@ -193,11 +211,13 @@ impl App {
 
     /// Errors for the currently selected phase (lint only for now).
     pub fn current_errors(&self) -> &[LintError] {
-        if self.phase_index == 0 {
-            &self.lint_errors
-        } else {
-            &[]
+        if let Some(report) = &self.report
+            && report.phases.lint.is_some()
+            && self.phase_index == 0
+        {
+            return &self.lint_errors;
         }
+        &[]
     }
 
     /// The currently selected error, if any.
@@ -208,9 +228,9 @@ impl App {
 
     /// Clamp phase_index and error_index to valid bounds.
     pub fn clamp_indices(&mut self) {
-        let phase_count = self.phase_entries().len();
-        if phase_count > 0 {
-            self.phase_index = self.phase_index.min(phase_count - 1);
+        let count = self.phase_count();
+        if count > 0 {
+            self.phase_index = self.phase_index.min(count - 1);
         } else {
             self.phase_index = 0;
         }
@@ -229,8 +249,7 @@ impl App {
             return "";
         };
 
-        let entries = self.phase_entries();
-        if entries.is_empty() {
+        if self.phase_count() == 0 {
             return "";
         }
 
@@ -399,6 +418,7 @@ mod tests {
     #[test]
     fn current_errors_returns_lint_errors_at_phase_zero() {
         let mut app = App::new();
+        app.report = Some(make_report(Some(make_lint_result("pass")), None, None));
         app.lint_errors = vec![make_lint_error("r1", Severity::Error)];
         assert_eq!(app.current_errors().len(), 1);
     }
@@ -406,8 +426,26 @@ mod tests {
     #[test]
     fn current_errors_empty_for_non_lint_phase() {
         let mut app = App::new();
+        app.report = Some(make_report(
+            Some(make_lint_result("pass")),
+            Some(vec![make_step("go", "server", "pass")]),
+            None,
+        ));
         app.lint_errors = vec![make_lint_error("r1", Severity::Error)];
         app.phase_index = 1;
+        assert!(app.current_errors().is_empty());
+    }
+
+    #[test]
+    fn current_errors_empty_when_no_lint_phase() {
+        let mut app = App::new();
+        app.report = Some(make_report(
+            None,
+            Some(vec![make_step("go", "server", "pass")]),
+            None,
+        ));
+        app.lint_errors = vec![make_lint_error("r1", Severity::Error)];
+        app.phase_index = 0; // phase 0 is generate, not lint
         assert!(app.current_errors().is_empty());
     }
 
@@ -420,6 +458,7 @@ mod tests {
     #[test]
     fn selected_error_returns_correct_item() {
         let mut app = App::new();
+        app.report = Some(make_report(Some(make_lint_result("pass")), None, None));
         app.lint_errors = vec![
             make_lint_error("r1", Severity::Error),
             make_lint_error("r2", Severity::Warning),
