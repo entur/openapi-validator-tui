@@ -1,14 +1,28 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Panel, ScreenMode};
+
+use super::panels;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
-    // Outer split: left panels | right panels
+    // Reserve 1 line at the bottom for the status bar.
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(size);
+
+    draw_panels(frame, app, outer[0]);
+    draw_bottom_bar(frame, app, outer[1]);
+}
+
+fn draw_panels(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    // Outer split: left panels | right panels.
     let horizontal = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(match app.screen_mode {
@@ -16,48 +30,66 @@ pub fn draw(frame: &mut Frame, app: &App) {
             ScreenMode::Half => vec![Constraint::Percentage(20), Constraint::Percentage(80)],
             ScreenMode::Full => vec![Constraint::Percentage(0), Constraint::Percentage(100)],
         })
-        .split(size);
+        .split(area);
 
-    // Left column: phases (top) + errors (bottom)
+    // Left column: phases (top) + errors (bottom).
     let left = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(horizontal[0]);
 
-    // Right column: detail (top) + spec context (bottom)
+    // Right column: detail (top) + spec context (bottom).
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(horizontal[1]);
 
-    let phases_block = make_block("Phases", app.focused_panel == Panel::Phases);
-    let errors_block = make_block("Errors", app.focused_panel == Panel::Errors);
-    let detail_block = make_block("Detail", app.focused_panel == Panel::Detail);
-    let spec_block = make_block("Spec Context", app.focused_panel == Panel::SpecContext);
-
-    frame.render_widget(
-        Paragraph::new("No phases loaded").block(phases_block),
-        left[0],
+    panels::draw_phases(frame, app, left[0], app.focused_panel == Panel::Phases);
+    panels::draw_errors(frame, app, left[1], app.focused_panel == Panel::Errors);
+    panels::draw_detail(frame, app, right[0], app.focused_panel == Panel::Detail);
+    panels::draw_spec_context(
+        frame,
+        app,
+        right[1],
+        app.focused_panel == Panel::SpecContext,
     );
-    frame.render_widget(Paragraph::new("No errors").block(errors_block), left[1]);
-    frame.render_widget(
-        Paragraph::new("Select an error to view details").block(detail_block),
-        right[0],
-    );
-    frame.render_widget(Paragraph::new("").block(spec_block), right[1]);
 }
 
-fn make_block(title: &str, focused: bool) -> Block<'_> {
-    let style = if focused {
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
+fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let hints = match app.focused_panel {
+        Panel::Phases => &[
+            ("j/k", "navigate"),
+            ("Tab", "next panel"),
+            ("+/_", "resize"),
+            ("q", "quit"),
+        ][..],
+        Panel::Errors => &[("j/k", "navigate"), ("Tab", "next panel"), ("q", "quit")][..],
+        Panel::Detail => &[
+            ("j/k", "scroll"),
+            ("[/]", "tab"),
+            ("Tab", "next panel"),
+            ("q", "quit"),
+        ][..],
+        Panel::SpecContext => &[("j/k", "scroll"), ("Tab", "next panel"), ("q", "quit")][..],
     };
 
-    Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(style)
+    let mut spans = Vec::new();
+    for (i, (key, action)) in hints.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            format!("[{key}]"),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {action}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    let bar = Paragraph::new(Line::from(spans));
+    frame.render_widget(bar, area);
 }

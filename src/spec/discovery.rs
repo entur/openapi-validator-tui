@@ -47,10 +47,11 @@ pub fn discover_spec(root: &Path, max_depth: usize) -> Result<Vec<String>> {
             continue;
         }
         let path = entry.path();
-        if is_yaml(path) && is_openapi_spec(path) {
-            if let Ok(rel) = path.strip_prefix(root) {
-                matches.push(rel.to_string_lossy().to_string());
-            }
+        if is_yaml(path)
+            && is_openapi_spec(path)
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            matches.push(rel.to_string_lossy().to_string());
         }
     }
 
