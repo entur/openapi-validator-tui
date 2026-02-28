@@ -1,5 +1,4 @@
 mod app;
-#[allow(unused)]
 mod fix;
 #[allow(unused)]
 mod log_parser;
@@ -182,6 +181,45 @@ fn resolve_spec_path(cwd: &Path, cfg: &config::Config) -> Option<std::path::Path
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
+    // Fix overlay: handle accept/skip/cancel before anything else.
+    if app.fix_proposal.is_some() {
+        match key.code {
+            KeyCode::Char('y') => {
+                let proposal = app.fix_proposal.take().unwrap();
+                if let Some(spec_path) = &app.spec_path {
+                    match fix::apply_fix(&proposal, spec_path) {
+                        Ok(()) => {
+                            // Re-parse spec after modification.
+                            if let Ok(raw) = std::fs::read_to_string(spec_path)
+                                && let Ok(index) = spec::parse_spec(&raw)
+                            {
+                                app.spec_index = Some(index);
+                            }
+                            start_pipeline(app);
+                            app.set_status("Fix applied, re-validating...", StatusLevel::Info);
+                        }
+                        Err(e) => {
+                            app.set_status(format!("Failed to apply fix: {e}"), StatusLevel::Error);
+                        }
+                    }
+                }
+                return Action::None;
+            }
+            KeyCode::Char('n') => {
+                app.fix_proposal = None;
+                // Advance to next error.
+                app.error_index = app.error_index.saturating_add(1);
+                app.clamp_indices();
+                return Action::None;
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.fix_proposal = None;
+                return Action::None;
+            }
+            _ => return Action::None,
+        }
+    }
+
     // Help overlay: any key dismisses it.
     if app.show_help {
         app.show_help = false;
@@ -335,6 +373,31 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 };
                 return Action::OpenEditor { path, line };
             }
+            (KeyCode::Char('f'), _) => {
+                let Some(error) = app.selected_error().cloned() else {
+                    app.set_status("No error selected", StatusLevel::Info);
+                    return Action::None;
+                };
+                let Some(ref spec_index) = app.spec_index else {
+                    app.set_status("No spec index available", StatusLevel::Error);
+                    return Action::None;
+                };
+                let Some(ref spec_path) = app.spec_path else {
+                    app.set_status("No spec file found", StatusLevel::Error);
+                    return Action::None;
+                };
+                match fix::propose_fix(&error, spec_index, spec_path) {
+                    Some(proposal) => {
+                        app.fix_proposal = Some(proposal);
+                    }
+                    None => {
+                        app.set_status(
+                            format!("No auto-fix available for '{}'", error.rule),
+                            StatusLevel::Info,
+                        );
+                    }
+                }
+            }
             _ => {}
         },
         Panel::Detail => match (key.code, key.modifiers) {
@@ -417,10 +480,7 @@ fn open_editor(
 
     match result {
         Err(e) => {
-            app.set_status(
-                format!("Failed to open editor: {e}"),
-                StatusLevel::Error,
-            );
+            app.set_status(format!("Failed to open editor: {e}"), StatusLevel::Error);
             return Ok(());
         }
         Ok(status) if !status.success() => {

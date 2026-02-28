@@ -21,7 +21,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_panels(frame, app, outer[0]);
     draw_bottom_bar(frame, app, outer[1]);
 
-    if app.show_help {
+    if let Some(ref proposal) = app.fix_proposal {
+        overlay::draw_fix_overlay(frame, proposal, size);
+    } else if app.show_help {
         overlay::draw_help_overlay(frame, size);
     }
 }
@@ -63,11 +65,7 @@ fn draw_panels(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     // Spinner occupies fixed width on the right when validating.
     const SPINNER_WIDTH: u16 = 16; // " ⠋ Validating "
-    let spinner_len = if app.validating {
-        SPINNER_WIDTH
-    } else {
-        0
-    };
+    let spinner_len = if app.validating { SPINNER_WIDTH } else { 0 };
 
     let bar_layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -93,15 +91,12 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         spans
     } else {
         let mut hints: Vec<(&str, &str)> = match app.focused_panel {
-            Panel::Phases => vec![
-                ("j/k", "navigate"),
-                ("Enter", "select"),
-                ("r", "run"),
-            ],
+            Panel::Phases => vec![("j/k", "navigate"), ("Enter", "select"), ("r", "run")],
             Panel::Errors => vec![
                 ("j/k", "navigate"),
                 ("Enter/d", "detail"),
                 ("e", "edit"),
+                ("f", "fix"),
                 ("r", "run"),
             ],
             Panel::Detail => vec![("j/k", "scroll"), ("[/]", "tab")],

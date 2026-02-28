@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::fix::FixProposal;
 use crate::log_parser::LintError;
 use crate::spec::SpecIndex;
 use lazyoav::config::Config;
@@ -160,6 +161,8 @@ pub struct App {
 
     /// Transient status message for the bottom bar.
     pub status_message: Option<StatusMessage>,
+    /// Active fix proposal overlay, if any.
+    pub fix_proposal: Option<FixProposal>,
     /// Whether to show the help overlay.
     pub show_help: bool,
     /// Whether Docker is available on the host.
@@ -189,6 +192,7 @@ impl App {
             spec_path: None,
             config: None,
             status_message: None,
+            fix_proposal: None,
             show_help: false,
             docker_available: false,
             tick: 0,
