@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::fix::FixProposal;
+use crate::highlight::HighlightEngine;
 use crate::log_parser::LintError;
 use crate::spec::SpecIndex;
 use lazyoav::config::Config;
@@ -169,6 +171,8 @@ pub struct App {
     pub docker_available: bool,
     /// Draw-cycle counter driving the spinner animation.
     pub tick: usize,
+    /// Syntax highlight engine (behind RefCell for interior mutability in draw).
+    pub highlight_engine: RefCell<HighlightEngine>,
 }
 
 impl App {
@@ -196,6 +200,7 @@ impl App {
             show_help: false,
             docker_available: false,
             tick: 0,
+            highlight_engine: RefCell::new(HighlightEngine::new()),
         }
     }
 

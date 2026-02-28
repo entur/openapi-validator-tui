@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static SPEC_VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// A 1-based line, 0-based column location in a source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,11 +23,22 @@ pub struct ContextWindow {
 pub struct SpecIndex {
     spans: HashMap<String, SourceSpan>,
     raw_lines: Vec<String>,
+    version: u64,
 }
 
 impl SpecIndex {
     pub fn new(spans: HashMap<String, SourceSpan>, raw_lines: Vec<String>) -> Self {
-        Self { spans, raw_lines }
+        let version = SPEC_VERSION.fetch_add(1, Ordering::Relaxed);
+        Self {
+            spans,
+            raw_lines,
+            version,
+        }
+    }
+
+    /// Monotonic version that increments on each re-parse.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// Look up a JSON pointer or dotted path and return its source location.
