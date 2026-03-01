@@ -24,12 +24,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     draw_bottom_bar(frame, app, outer[1]);
 
-    if app.view_mode == ViewMode::Validator {
-        if let Some(ref proposal) = app.fix_proposal {
-            overlay::draw_fix_overlay(frame, proposal, size);
-        } else if app.show_help {
-            overlay::draw_help_overlay(frame, size);
-        }
+    if app.view_mode == ViewMode::Validator
+        && let Some(ref proposal) = app.fix_proposal
+    {
+        overlay::draw_fix_overlay(frame, proposal, size);
+        return;
+    }
+
+    if app.show_help {
+        overlay::draw_help_overlay(frame, size);
     }
 }
 

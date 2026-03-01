@@ -12,6 +12,7 @@ pub fn refresh_file_tree(state: &mut CodeBrowserState, work_dir: &Path) {
     state.file_tree.clear();
     state.file_index = 0;
     state.file_content = None;
+    state.opened_file_index = None;
     state.file_scroll = 0;
 
     let gen_dir = match state.active_generator_dir() {
@@ -51,7 +52,7 @@ pub fn refresh_file_tree(state: &mut CodeBrowserState, work_dir: &Path) {
 
 /// Load the file at the current `file_index` into `file_content`.
 ///
-/// Skips directories. Detects binary files (null bytes in first 8KB).
+/// Skips directories and symlinks. Detects binary files (null bytes in first 8KB).
 /// Truncates files larger than 512KB with a notice.
 pub fn load_selected_file(state: &mut CodeBrowserState) {
     let entry = match state.file_tree.get(state.file_index) {
@@ -66,12 +67,35 @@ pub fn load_selected_file(state: &mut CodeBrowserState) {
     let path = &entry.path;
 
     const BINARY_PROBE: usize = 8192;
-    const MAX_SIZE: u64 = 512 * 1024;
+    const MAX_SIZE: usize = 512 * 1024;
 
-    let metadata = match std::fs::metadata(path) {
+    // Use symlink_metadata to avoid following symlinks outside .generated/.
+    let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => {
             state.file_content = Some(vec!["[Cannot read file]".into()]);
+            state.opened_file_index = Some(state.file_index);
+            state.content_version += 1;
+            state.file_scroll = 0;
+            return;
+        }
+    };
+
+    if !metadata.is_file() {
+        state.file_content = Some(vec!["[Not a regular file]".into()]);
+        state.opened_file_index = Some(state.file_index);
+        state.content_version += 1;
+        state.file_scroll = 0;
+        return;
+    }
+
+    // Read only what we need via a File handle.
+    use std::io::Read;
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => {
+            state.file_content = Some(vec!["[Cannot read file]".into()]);
+            state.opened_file_index = Some(state.file_index);
             state.content_version += 1;
             state.file_scroll = 0;
             return;
@@ -79,37 +103,51 @@ pub fn load_selected_file(state: &mut CodeBrowserState) {
     };
 
     // Binary detection: read first 8KB and check for null bytes.
-    let probe = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let mut probe = vec![0u8; BINARY_PROBE];
+    let probe_len = match file.read(&mut probe) {
+        Ok(n) => n,
         Err(_) => {
             state.file_content = Some(vec!["[Cannot read file]".into()]);
+            state.opened_file_index = Some(state.file_index);
             state.content_version += 1;
             state.file_scroll = 0;
             return;
         }
     };
 
-    let probe_len = probe.len().min(BINARY_PROBE);
     if probe[..probe_len].contains(&0) {
         state.file_content = Some(vec!["[Binary file — cannot display]".into()]);
+        state.opened_file_index = Some(state.file_index);
         state.content_version += 1;
         state.file_scroll = 0;
         return;
     }
 
-    let text = String::from_utf8_lossy(&probe);
+    // Read up to MAX_SIZE total (we already have probe_len bytes).
+    let remaining = MAX_SIZE.saturating_sub(probe_len);
+    let mut rest = vec![0u8; remaining];
+    let rest_len = file.read(&mut rest).unwrap_or(0);
+
+    let total = probe_len + rest_len;
+    let mut bytes = probe;
+    bytes.truncate(probe_len);
+    bytes.extend_from_slice(&rest[..rest_len]);
+
+    let text = String::from_utf8_lossy(&bytes);
     let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
 
-    if metadata.len() > MAX_SIZE {
+    let file_size = metadata.len() as usize;
+    if file_size > total {
         lines.push(String::new());
         lines.push(format!(
             "[File truncated — showing first {}KB of {}KB]",
-            MAX_SIZE / 1024,
-            metadata.len() / 1024
+            total / 1024,
+            file_size / 1024
         ));
     }
 
     state.file_content = Some(lines);
+    state.opened_file_index = Some(state.file_index);
     state.content_version += 1;
     state.file_scroll = 0;
 }

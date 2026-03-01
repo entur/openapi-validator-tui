@@ -109,7 +109,11 @@ fn draw_file_tree(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_file_content(frame: &mut Frame, app: &App, area: Rect) {
     let focused = app.browser.browser_focus == BrowserPanel::FileContent;
 
-    let title = match app.browser.file_tree.get(app.browser.file_index) {
+    let title = match app
+        .browser
+        .opened_file_index
+        .and_then(|i| app.browser.file_tree.get(i))
+    {
         Some(entry) if app.browser.file_content.is_some() && !entry.is_dir => entry.name.as_str(),
         _ => "Content",
     };
@@ -134,11 +138,11 @@ fn draw_file_content(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    // Determine syntax from the currently selected file's path.
+    // Determine syntax from the opened file's path (not the current selection).
     let syntax_name = app
         .browser
-        .file_tree
-        .get(app.browser.file_index)
+        .opened_file_index
+        .and_then(|i| app.browser.file_tree.get(i))
         .map(|e| syntax_name_for_path(&e.path))
         .unwrap_or("Plain Text");
 

@@ -44,6 +44,8 @@ pub struct CodeBrowserState {
     pub file_index: usize,
     /// Loaded file content (lines), if any.
     pub file_content: Option<Vec<String>>,
+    /// Index of the file whose content is currently loaded (may differ from file_index).
+    pub opened_file_index: Option<usize>,
     /// Vertical scroll offset in the file content viewer.
     pub file_scroll: u16,
     /// Which sub-panel currently has focus.
@@ -62,6 +64,7 @@ impl CodeBrowserState {
             file_tree: Vec::new(),
             file_index: 0,
             file_content: None,
+            opened_file_index: None,
             file_scroll: 0,
             browser_focus: BrowserPanel::FileTree,
             content_version: 0,
