@@ -677,6 +677,7 @@ fn drain_pipeline_events(app: &mut App) {
                 PipelineEvent::Aborted(reason) => {
                     app.live_log
                         .push_str(&format!("\n--- Aborted: {reason} ---\n"));
+                    app.snapshots.clear();
                     app.validating = false;
                     finished = true;
                     break;
@@ -844,7 +845,9 @@ fn activate_diff_mode(app: &mut App) {
     app.browser.diff_state.active_generator = if has_diff {
         key
     } else {
-        app.browser.diff_state.diffs.keys().next().cloned()
+        let mut keys: Vec<_> = app.browser.diff_state.diffs.keys().cloned().collect();
+        keys.sort_unstable();
+        keys.into_iter().next()
     };
 }
 
