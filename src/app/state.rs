@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -9,6 +10,8 @@ use crate::spec::SpecIndex;
 use lazyoav::config::Config;
 use lazyoav::docker::CancelToken;
 use lazyoav::pipeline::{PipelineEvent, ValidateReport};
+
+use super::diff::DiffViewState;
 
 /// Top-level view: validator grid or generated code browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +57,8 @@ pub struct CodeBrowserState {
     pub content_version: u64,
     /// Dedicated highlight engine for generated code (separate from spec).
     pub highlight_engine: RefCell<HighlightEngine>,
+    /// State for the generation diff toggle mode.
+    pub diff_state: DiffViewState,
 }
 
 impl CodeBrowserState {
@@ -69,6 +74,7 @@ impl CodeBrowserState {
             browser_focus: BrowserPanel::FileTree,
             content_version: 0,
             highlight_engine: RefCell::new(HighlightEngine::new()),
+            diff_state: DiffViewState::new(),
         }
     }
 
@@ -241,6 +247,8 @@ pub struct App {
     pub show_help: bool,
     /// Whether Docker is available on the host.
     pub docker_available: bool,
+    /// Pre-pipeline snapshots of generated output, keyed by `"{gen}-{scope}"`.
+    pub snapshots: HashMap<String, HashMap<PathBuf, String>>,
     /// Draw-cycle counter driving the spinner animation.
     pub tick: usize,
     /// Syntax highlight engine (behind RefCell for interior mutability in draw).
@@ -273,6 +281,7 @@ impl App {
             fix_proposal: None,
             show_help: false,
             docker_available: false,
+            snapshots: HashMap::new(),
             tick: 0,
             highlight_engine: RefCell::new(HighlightEngine::new()),
         }

@@ -20,7 +20,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     match app.view_mode {
         ViewMode::Validator => draw_panels(frame, app, outer[0]),
-        ViewMode::CodeBrowser => panels::draw_code_browser(frame, app, outer[0]),
+        ViewMode::CodeBrowser => {
+            if app.browser.diff_state.active {
+                panels::draw_diff_browser(frame, app, outer[0]);
+            } else {
+                panels::draw_code_browser(frame, app, outer[0]);
+            }
+        }
     }
     draw_bottom_bar(frame, app, outer[1]);
 
@@ -99,16 +105,46 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         spans
     } else {
         let mut hints: Vec<(&str, &str)> = if app.view_mode == ViewMode::CodeBrowser {
-            match app.browser.browser_focus {
-                BrowserPanel::FileTree => vec![
-                    ("j/k", "navigate"),
-                    ("Enter", "open"),
-                    ("[/]", "generator"),
-                    ("Tab", "panel"),
-                    ("g", "validator"),
-                ],
-                BrowserPanel::FileContent => {
-                    vec![("j/k", "scroll"), ("Tab", "panel"), ("g", "validator")]
+            if app.browser.diff_state.active {
+                use crate::app::diff::DiffPanel;
+                match app.browser.diff_state.focus {
+                    DiffPanel::FileList => vec![
+                        ("j/k", "navigate"),
+                        ("Enter", "view"),
+                        ("[/]", "generator"),
+                        ("Tab", "panel"),
+                        ("d/Esc", "close diff"),
+                    ],
+                    DiffPanel::DiffContent => vec![
+                        ("j/k", "scroll"),
+                        ("[/]", "generator"),
+                        ("Tab", "panel"),
+                        ("d/Esc", "close diff"),
+                    ],
+                }
+            } else {
+                let has_diffs = !app.browser.diff_state.diffs.is_empty();
+                match app.browser.browser_focus {
+                    BrowserPanel::FileTree => {
+                        let mut h = vec![
+                            ("j/k", "navigate"),
+                            ("Enter", "open"),
+                            ("[/]", "generator"),
+                            ("Tab", "panel"),
+                            ("g", "validator"),
+                        ];
+                        if has_diffs {
+                            h.push(("d", "diff"));
+                        }
+                        h
+                    }
+                    BrowserPanel::FileContent => {
+                        let mut h = vec![("j/k", "scroll"), ("Tab", "panel"), ("g", "validator")];
+                        if has_diffs {
+                            h.push(("d", "diff"));
+                        }
+                        h
+                    }
                 }
             }
         } else {

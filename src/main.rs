@@ -19,6 +19,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use app::diff::{DiffPanel, DiffViewState};
 use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::docker::{self, CancelToken};
@@ -583,6 +584,18 @@ fn start_pipeline(app: &mut App) {
 
     app.spec_path = Some(spec_path.clone());
 
+    app.snapshots.clear();
+    app.browser.diff_state = DiffViewState::new();
+    let gen_pairs = pipeline::commands::build_generator_list(&cfg);
+    for (generator, scope) in &gen_pairs {
+        let dir_name = format!("{generator}-{scope}");
+        let gen_dir = cwd.join(".generated").join(&dir_name);
+        if gen_dir.is_dir() {
+            let snap = app::diff::snapshot_directory(&gen_dir);
+            app.snapshots.insert(dir_name, snap);
+        }
+    }
+
     let input = PipelineInput {
         config: cfg,
         spec_path,
@@ -623,6 +636,37 @@ fn drain_pipeline_events(app: &mut App) {
                     if let Some(lint) = &report.phases.lint {
                         app.lint_errors = log_parser::parse_lint_log(&lint.log);
                     }
+
+                    if let Some(gen_steps) = &report.phases.generate
+                        && let Ok(cwd) = std::env::current_dir()
+                    {
+                        let mut total_changed = 0usize;
+                        for step in gen_steps {
+                            let key = format!("{}-{}", step.generator, step.scope);
+                            let gen_dir = cwd.join(".generated").join(&key);
+                            let before = app.snapshots.remove(&key).unwrap_or_default();
+                            let diff = app::diff::compute_diff(
+                                &step.generator,
+                                &step.scope,
+                                &before,
+                                &gen_dir,
+                            );
+                            if !diff.files.is_empty() {
+                                total_changed += diff.files.len();
+                                app.browser.diff_state.diffs.insert(key, diff);
+                            }
+                        }
+                        if total_changed > 0 {
+                            app.set_status(
+                                format!(
+                                    "{total_changed} file(s) changed in generated output \u{2014} 'd' to view diff"
+                                ),
+                                StatusLevel::Info,
+                            );
+                        }
+                    }
+                    app.snapshots.clear();
+
                     app.report = Some(report);
                     app.validating = false;
                     app.live_log.clear();
@@ -633,6 +677,7 @@ fn drain_pipeline_events(app: &mut App) {
                 PipelineEvent::Aborted(reason) => {
                     app.live_log
                         .push_str(&format!("\n--- Aborted: {reason} ---\n"));
+                    app.snapshots.clear();
                     app.validating = false;
                     finished = true;
                     break;
@@ -681,7 +726,19 @@ fn sync_generators_from_report(app: &mut App) {
 
 /// Handle keys when the code browser view is active.
 fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
+    if app.browser.diff_state.active {
+        return handle_diff_key(app, key);
+    }
+
     match (key.code, key.modifiers) {
+        (KeyCode::Char('d'), KeyModifiers::NONE) => {
+            if app.browser.diff_state.diffs.is_empty() {
+                app.set_status("No diff data available", StatusLevel::Info);
+            } else {
+                activate_diff_mode(app);
+            }
+            return Action::None;
+        }
         // Panel focus switching.
         (KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'), _) => {
             app.browser.browser_focus = BrowserPanel::FileContent;
@@ -775,6 +832,148 @@ fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
         _ => {}
     }
     Action::None
+}
+
+fn activate_diff_mode(app: &mut App) {
+    let key = app.browser.active_generator_dir();
+    let has_diff = key
+        .as_ref()
+        .is_some_and(|k| app.browser.diff_state.diffs.contains_key(k));
+
+    app.browser.diff_state.active = true;
+    app.browser.diff_state.reset_nav();
+    app.browser.diff_state.active_generator = if has_diff {
+        key
+    } else {
+        let mut keys: Vec<_> = app.browser.diff_state.diffs.keys().cloned().collect();
+        keys.sort_unstable();
+        keys.into_iter().next()
+    };
+}
+
+fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('d'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
+            app.browser.diff_state.active = false;
+        }
+
+        (KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'), _) => {
+            app.browser.diff_state.focus = DiffPanel::DiffContent;
+        }
+        (KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h'), _) => {
+            app.browser.diff_state.focus = DiffPanel::FileList;
+        }
+
+        (KeyCode::Enter, _) if app.browser.diff_state.focus == DiffPanel::FileList => {
+            app.browser.diff_state.scroll = 0;
+            app.browser.diff_state.focus = DiffPanel::DiffContent;
+        }
+
+        (KeyCode::Char(']'), _) => cycle_diff_generator(app, true),
+        (KeyCode::Char('['), _) => cycle_diff_generator(app, false),
+
+        (KeyCode::Down | KeyCode::Char('j'), _) => match app.browser.diff_state.focus {
+            DiffPanel::FileList => {
+                let max = app
+                    .browser
+                    .diff_state
+                    .active_diff()
+                    .map(|d| d.files.len().saturating_sub(1))
+                    .unwrap_or(0);
+                app.browser.diff_state.file_index =
+                    (app.browser.diff_state.file_index + 1).min(max);
+            }
+            DiffPanel::DiffContent => {
+                app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(1);
+            }
+        },
+        (KeyCode::Up | KeyCode::Char('k'), _) => match app.browser.diff_state.focus {
+            DiffPanel::FileList => {
+                app.browser.diff_state.file_index =
+                    app.browser.diff_state.file_index.saturating_sub(1);
+            }
+            DiffPanel::DiffContent => {
+                app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(1);
+            }
+        },
+        (KeyCode::Home, _) => match app.browser.diff_state.focus {
+            DiffPanel::FileList => app.browser.diff_state.file_index = 0,
+            DiffPanel::DiffContent => app.browser.diff_state.scroll = 0,
+        },
+        (KeyCode::End, _) => match app.browser.diff_state.focus {
+            DiffPanel::FileList => {
+                let max = app
+                    .browser
+                    .diff_state
+                    .active_diff()
+                    .map(|d| d.files.len().saturating_sub(1))
+                    .unwrap_or(0);
+                app.browser.diff_state.file_index = max;
+            }
+            DiffPanel::DiffContent => {
+                app.browser.diff_state.scroll = u16::MAX;
+            }
+        },
+        (KeyCode::PageUp, _) => match app.browser.diff_state.focus {
+            DiffPanel::FileList => {
+                app.browser.diff_state.file_index =
+                    app.browser.diff_state.file_index.saturating_sub(10);
+            }
+            DiffPanel::DiffContent => {
+                app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(20);
+            }
+        },
+        (KeyCode::PageDown, _) => match app.browser.diff_state.focus {
+            DiffPanel::FileList => {
+                let max = app
+                    .browser
+                    .diff_state
+                    .active_diff()
+                    .map(|d| d.files.len().saturating_sub(1))
+                    .unwrap_or(0);
+                app.browser.diff_state.file_index =
+                    (app.browser.diff_state.file_index + 10).min(max);
+            }
+            DiffPanel::DiffContent => {
+                app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(20);
+            }
+        },
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(20);
+        }
+        (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(20);
+        }
+
+        _ => {}
+    }
+    Action::None
+}
+
+fn cycle_diff_generator(app: &mut App, forward: bool) {
+    let mut keys: Vec<String> = app.browser.diff_state.diffs.keys().cloned().collect();
+    if keys.is_empty() {
+        return;
+    }
+    keys.sort_unstable();
+
+    let current = app
+        .browser
+        .diff_state
+        .active_generator
+        .as_deref()
+        .unwrap_or("");
+    let current_idx = keys.iter().position(|k| k == current).unwrap_or(0);
+
+    let next_idx = if forward {
+        (current_idx + 1) % keys.len()
+    } else {
+        (current_idx + keys.len() - 1) % keys.len()
+    };
+
+    app.browser.diff_state.active_generator = Some(keys[next_idx].clone());
+    app.browser.diff_state.file_index = 0;
+    app.browser.diff_state.scroll = 0;
 }
 
 #[cfg(test)]
