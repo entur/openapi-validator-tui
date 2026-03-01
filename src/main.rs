@@ -584,7 +584,6 @@ fn start_pipeline(app: &mut App) {
 
     app.spec_path = Some(spec_path.clone());
 
-    // Snapshot existing generated output for diff computation after pipeline.
     app.snapshots.clear();
     app.browser.diff_state = DiffViewState::new();
     let gen_pairs = pipeline::commands::build_generator_list(&cfg);
@@ -638,7 +637,6 @@ fn drain_pipeline_events(app: &mut App) {
                         app.lint_errors = log_parser::parse_lint_log(&lint.log);
                     }
 
-                    // Compute diffs against pre-pipeline snapshots.
                     if let Some(gen_steps) = &report.phases.generate
                         && let Ok(cwd) = std::env::current_dir()
                     {
@@ -727,13 +725,11 @@ fn sync_generators_from_report(app: &mut App) {
 
 /// Handle keys when the code browser view is active.
 fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
-    // Diff mode intercept.
     if app.browser.diff_state.active {
         return handle_diff_key(app, key);
     }
 
     match (key.code, key.modifiers) {
-        // Toggle diff view (bare 'd', not Ctrl+d).
         (KeyCode::Char('d'), KeyModifiers::NONE) => {
             if app.browser.diff_state.diffs.is_empty() {
                 app.set_status("No diff data available", StatusLevel::Info);
@@ -837,33 +833,27 @@ fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
     Action::None
 }
 
-/// Enter diff mode, syncing the active generator key.
 fn activate_diff_mode(app: &mut App) {
     let key = app.browser.active_generator_dir();
-    app.browser.diff_state.active = true;
-    app.browser.diff_state.active_generator = key.clone();
-    app.browser.diff_state.reset_nav();
-
-    // If the current generator has no diffs, find the first one that does.
-    if key
+    let has_diff = key
         .as_ref()
-        .and_then(|k| app.browser.diff_state.diffs.get(k))
-        .is_none()
-    {
-        app.browser.diff_state.active_generator =
-            app.browser.diff_state.diffs.keys().next().cloned();
-    }
+        .is_some_and(|k| app.browser.diff_state.diffs.contains_key(k));
+
+    app.browser.diff_state.active = true;
+    app.browser.diff_state.reset_nav();
+    app.browser.diff_state.active_generator = if has_diff {
+        key
+    } else {
+        app.browser.diff_state.diffs.keys().next().cloned()
+    };
 }
 
-/// Handle keys when diff mode is active within the code browser.
 fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
     match (key.code, key.modifiers) {
-        // Exit diff mode (bare 'd', not Ctrl+d).
         (KeyCode::Char('d'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
             app.browser.diff_state.active = false;
         }
 
-        // Focus switching.
         (KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'), _) => {
             app.browser.diff_state.focus = DiffPanel::DiffContent;
         }
@@ -871,21 +861,14 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
             app.browser.diff_state.focus = DiffPanel::FileList;
         }
 
-        // Select file and auto-focus diff content.
         (KeyCode::Enter, _) if app.browser.diff_state.focus == DiffPanel::FileList => {
             app.browser.diff_state.scroll = 0;
             app.browser.diff_state.focus = DiffPanel::DiffContent;
         }
 
-        // Cycle generators.
-        (KeyCode::Char(']'), _) => {
-            cycle_diff_generator(app, true);
-        }
-        (KeyCode::Char('['), _) => {
-            cycle_diff_generator(app, false);
-        }
+        (KeyCode::Char(']'), _) => cycle_diff_generator(app, true),
+        (KeyCode::Char('['), _) => cycle_diff_generator(app, false),
 
-        // Navigation — dispatched based on focused sub-panel.
         (KeyCode::Down | KeyCode::Char('j'), _) => match app.browser.diff_state.focus {
             DiffPanel::FileList => {
                 let max = app
@@ -964,12 +947,12 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
     Action::None
 }
 
-/// Cycle through generators that have diffs.
 fn cycle_diff_generator(app: &mut App, forward: bool) {
-    let keys: Vec<String> = app.browser.diff_state.diffs.keys().cloned().collect();
+    let mut keys: Vec<String> = app.browser.diff_state.diffs.keys().cloned().collect();
     if keys.is_empty() {
         return;
     }
+    keys.sort_unstable();
 
     let current = app
         .browser

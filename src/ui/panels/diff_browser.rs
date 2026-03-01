@@ -50,7 +50,6 @@ fn draw_change_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Generator tab header (1 line) + file list.
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])

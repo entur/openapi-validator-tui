@@ -42,19 +42,12 @@ pub enum DiffPanel {
     DiffContent,
 }
 
-/// Persistent state for the diff toggle mode inside the code browser.
 pub struct DiffViewState {
-    /// Computed diffs keyed by `"{generator}-{scope}"`.
     pub diffs: HashMap<String, GeneratorDiff>,
-    /// Whether diff mode is currently displayed.
     pub active: bool,
-    /// Selected file index in the change list.
     pub file_index: usize,
-    /// Vertical scroll offset in the diff content panel.
     pub scroll: u16,
-    /// Which sub-panel has focus.
     pub focus: DiffPanel,
-    /// Currently active generator key (e.g. "go-server").
     pub active_generator: Option<String>,
 }
 
@@ -70,21 +63,18 @@ impl DiffViewState {
         }
     }
 
-    /// Reset navigation state (when switching generators or entering diff mode).
     pub fn reset_nav(&mut self) {
         self.file_index = 0;
         self.scroll = 0;
         self.focus = DiffPanel::FileList;
     }
 
-    /// The diff for the currently active generator, if any.
     pub fn active_diff(&self) -> Option<&GeneratorDiff> {
         self.active_generator
             .as_ref()
             .and_then(|key| self.diffs.get(key))
     }
 
-    /// Total number of changed files across all generators.
     #[cfg(test)]
     pub fn total_changed_files(&self) -> usize {
         self.diffs.values().map(|d| d.files.len()).sum()
@@ -93,16 +83,11 @@ impl DiffViewState {
 
 // ── Snapshot ─────────────────────────────────────────────────────────
 
-/// Maximum file size to include in a snapshot (512 KB).
 const MAX_FILE_SIZE: u64 = 512 * 1024;
-
-/// Number of bytes to probe for null bytes (binary detection).
 const BINARY_PROBE_SIZE: usize = 8192;
 
 /// Walk `root` and return a map of relative paths → file contents.
-///
-/// Skips binary files (detected via null-byte probe in the first 8 KB)
-/// and files larger than 512 KB.
+/// Skips binary files and files larger than `MAX_FILE_SIZE`.
 pub fn snapshot_directory(root: &Path) -> HashMap<PathBuf, String> {
     let mut snapshot = HashMap::new();
 
@@ -115,7 +100,6 @@ pub fn snapshot_directory(root: &Path) -> HashMap<PathBuf, String> {
             continue;
         }
 
-        // Skip oversized files.
         if let Ok(meta) = entry.metadata()
             && meta.len() > MAX_FILE_SIZE
         {
@@ -126,7 +110,6 @@ pub fn snapshot_directory(root: &Path) -> HashMap<PathBuf, String> {
             continue;
         };
 
-        // Binary detection: check first N bytes for null.
         let probe = &content[..content.len().min(BINARY_PROBE_SIZE)];
         if probe.contains(&0u8) {
             continue;
@@ -150,9 +133,6 @@ pub fn snapshot_directory(root: &Path) -> HashMap<PathBuf, String> {
 
 // ── Diff computation ─────────────────────────────────────────────────
 
-/// Compare the current state of `gen_root` against a prior `before` snapshot.
-///
-/// Returns a `GeneratorDiff` with per-file unified diffs.
 pub fn compute_diff(
     generator: &str,
     scope: &str,
@@ -162,45 +142,37 @@ pub fn compute_diff(
     let after = snapshot_directory(gen_root);
     let mut files = Vec::new();
 
-    // Deleted files: in `before` but not `after`.
-    for rel in before.keys() {
+    for (rel, before_text) in before {
         if !after.contains_key(rel) {
-            let diff_lines = make_delete_lines(before.get(rel).unwrap());
             files.push(FileDiff {
                 rel_path: rel.to_string_lossy().into_owned(),
                 kind: ChangeKind::Deleted,
-                lines: diff_lines,
+                lines: make_delete_lines(before_text),
             });
         }
     }
 
-    // Added and modified files.
     for (rel, after_text) in &after {
         match before.get(rel) {
             None => {
-                // Added.
-                let diff_lines = make_add_lines(after_text);
                 files.push(FileDiff {
                     rel_path: rel.to_string_lossy().into_owned(),
                     kind: ChangeKind::Added,
-                    lines: diff_lines,
+                    lines: make_add_lines(after_text),
                 });
             }
             Some(before_text) if before_text != after_text => {
-                // Modified.
-                let diff_lines = make_unified_diff(before_text, after_text);
                 files.push(FileDiff {
                     rel_path: rel.to_string_lossy().into_owned(),
                     kind: ChangeKind::Modified,
-                    lines: diff_lines,
+                    lines: make_unified_diff(before_text, after_text),
                 });
             }
-            _ => {} // Unchanged.
+            _ => {}
         }
     }
 
-    // Sort by path for stable ordering.
-    files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    files.sort_unstable_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
     GeneratorDiff {
         generator: generator.into(),
@@ -214,7 +186,7 @@ fn make_unified_diff(old: &str, new: &str) -> Vec<DiffLine> {
     let mut lines = Vec::new();
 
     for hunk in text_diff.unified_diff().context_radius(3).iter_hunks() {
-        lines.push(DiffLine::HunkHeader(format!("{}", hunk.header())));
+        lines.push(DiffLine::HunkHeader(hunk.header().to_string()));
         for change in hunk.iter_changes() {
             let text = change.value().trim_end_matches('\n').to_string();
             match change.tag() {
@@ -277,7 +249,6 @@ mod tests {
     fn snapshot_skips_binary_files() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("text.txt"), "ok").unwrap();
-        // Binary file with null bytes.
         fs::write(dir.path().join("bin.dat"), b"ab\x00cd").unwrap();
 
         let snap = snapshot_directory(dir.path());
@@ -315,8 +286,6 @@ mod tests {
     #[test]
     fn compute_diff_all_deleted() {
         let dir = tempfile::tempdir().unwrap();
-        // Dir exists but is empty.
-
         let mut before = HashMap::new();
         before.insert(PathBuf::from("old.txt"), "deleted content\n".into());
 
@@ -342,7 +311,6 @@ mod tests {
         let diff = compute_diff("go", "server", &before, dir.path());
         assert_eq!(diff.files.len(), 1);
         assert_eq!(diff.files[0].kind, ChangeKind::Modified);
-        // Should have both insert and delete lines.
         let has_insert = diff.files[0]
             .lines
             .iter()
