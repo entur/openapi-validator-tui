@@ -8,7 +8,7 @@ use crate::fix::FixProposal;
 
 /// Draw the help overlay centered on the screen.
 pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(62, 25, area);
+    let popup = centered_rect(62, 26, area);
 
     frame.render_widget(Clear, popup);
 
@@ -51,6 +51,7 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         ("+", Some("Expand layout")),
         ("_", Some("Shrink layout")),
         ("[/]", Some("Switch detail tab")),
+        ("g", Some("Code browser")),
         ("q", Some("Quit")),
         ("?", Some("Toggle this help")),
     ]);
