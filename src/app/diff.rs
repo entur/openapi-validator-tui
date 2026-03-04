@@ -351,7 +351,7 @@ mod tests {
     fn diff_view_state_total_changed_files() {
         let mut state = DiffViewState::new();
         state.diffs.insert(
-            "go-server".into(),
+            "server/go".into(),
             GeneratorDiff {
                 generator: "go".into(),
                 scope: "server".into(),
@@ -363,7 +363,7 @@ mod tests {
             },
         );
         state.diffs.insert(
-            "ts-client".into(),
+            "client/ts".into(),
             GeneratorDiff {
                 generator: "ts".into(),
                 scope: "client".into(),

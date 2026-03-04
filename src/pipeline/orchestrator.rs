@@ -4,7 +4,8 @@ use crate::config::Linter;
 use crate::docker::{self, CancelToken, OutputLine};
 
 use super::commands::{
-    build_generator_list, compile_command, generator_command, redocly_command, spectral_command,
+    build_generator_list, compile_command, generator_command, redocly_command, resolve_config_path,
+    spectral_command, write_builtin_configs,
 };
 use super::types::{
     LintResult, Phase, Phases, PipelineEvent, PipelineInput, StepResult, Summary, ValidateReport,
@@ -76,6 +77,7 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
     let generators = build_generator_list(cfg);
 
     if cfg.generate && !generators.is_empty() {
+        write_builtin_configs(cfg, &input.work_dir, &generators);
         let gen_results =
             run_steps_parallel(&generators, cfg, &input, &cancel, &tx, StepKind::Generate);
 
@@ -175,7 +177,15 @@ fn run_steps_parallel(
 
                 let cmd = match kind {
                     StepKind::Generate => {
-                        generator_command(cfg, &input.spec_path, &input.work_dir, gen_name, scope)
+                        let config_path = resolve_config_path(cfg, gen_name, scope);
+                        generator_command(
+                            cfg,
+                            &input.spec_path,
+                            &input.work_dir,
+                            gen_name,
+                            scope,
+                            config_path.as_deref(),
+                        )
                     }
                     StepKind::Compile => compile_command(cfg, &input.work_dir, gen_name, scope),
                 };
@@ -450,10 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_empty_generators_skips_generate_compile() {
+    fn pipeline_generate_disabled_skips_generate_compile() {
         let cfg = Config {
             lint: false,
-            generate: true,
+            generate: false,
             compile: true,
             server_generators: Vec::new(),
             client_generators: Vec::new(),
@@ -468,7 +478,7 @@ mod tests {
             match ev {
                 PipelineEvent::PhaseStarted(Phase::Generate { .. })
                 | PipelineEvent::PhaseStarted(Phase::Compile { .. }) => {
-                    panic!("generate/compile should not start with empty generators");
+                    panic!("generate/compile should not start when generate=false");
                 }
                 _ => {}
             }

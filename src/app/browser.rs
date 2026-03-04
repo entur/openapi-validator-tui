@@ -20,7 +20,7 @@ pub fn refresh_file_tree(state: &mut CodeBrowserState, work_dir: &Path) {
         None => return,
     };
 
-    let root = work_dir.join(".generated").join(&gen_dir);
+    let root = work_dir.join(".oav/generated").join(&gen_dir);
     if !root.is_dir() {
         return;
     }
@@ -69,7 +69,7 @@ pub fn load_selected_file(state: &mut CodeBrowserState) {
     const BINARY_PROBE: usize = 8192;
     const MAX_SIZE: usize = 512 * 1024;
 
-    // Use symlink_metadata to avoid following symlinks outside .generated/.
+    // Use symlink_metadata to avoid following symlinks outside .oav/generated/.
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => {
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn refresh_populated_dir_builds_tree() {
         let tmp = TempDir::new().unwrap();
-        let gen_dir = tmp.path().join(".generated/go-server");
+        let gen_dir = tmp.path().join(".oav/generated/server/go");
         std::fs::create_dir_all(gen_dir.join("src/main")).unwrap();
         std::fs::write(gen_dir.join("build.gradle"), "apply plugin").unwrap();
         std::fs::write(gen_dir.join("src/main/App.java"), "class App {}").unwrap();
