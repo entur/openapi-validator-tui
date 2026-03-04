@@ -24,6 +24,7 @@ use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::docker::{self, CancelToken};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
+use lazyoav::scaffold;
 
 /// Action returned by `handle_key` to signal the run loop.
 enum Action {
@@ -107,6 +108,11 @@ fn load_from_cwd(app: &mut App) {
         Err(_) => return,
     };
 
+    // Scaffold .oav/ directories early — warn but don't abort on failure.
+    if let Err(e) = scaffold::ensure_oav_dirs(&cwd) {
+        eprintln!("warning: failed to scaffold .oav/ dirs: {e}");
+    }
+
     // Check Docker availability.
     app.docker_available = docker::ensure_available().is_ok();
     if !app.docker_available {
@@ -128,8 +134,21 @@ fn load_from_cwd(app: &mut App) {
         }
     };
 
+    // Manage .gitignore if enabled.
+    if cfg.manage_gitignore
+        && let Err(e) = scaffold::manage_gitignore(&cwd)
+    {
+        eprintln!("warning: failed to manage .gitignore: {e}");
+    }
+
+    // Validate config against generator registry.
+    let warnings = config::validate(&cfg);
+    if let Some(first) = warnings.first() {
+        app.set_status(first.clone(), StatusLevel::Warn);
+    }
+
     // Load report if present.
-    let report_path = cwd.join("report.json");
+    let report_path = cwd.join(".oav/reports/report.json");
     if let Ok(report_json) = std::fs::read_to_string(&report_path)
         && let Ok(report) = serde_json::from_str::<pipeline::ValidateReport>(&report_json)
     {

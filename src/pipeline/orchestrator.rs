@@ -140,6 +140,12 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
         },
     };
 
+    // Persist report to disk.
+    let report_path = input.work_dir.join(".oav/reports/report.json");
+    if let Ok(json) = serde_json::to_string_pretty(&report) {
+        let _ = std::fs::write(&report_path, json);
+    }
+
     let _ = tx.send(PipelineEvent::Completed(report));
 }
 

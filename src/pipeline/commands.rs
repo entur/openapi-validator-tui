@@ -31,7 +31,7 @@ pub fn spectral_command(cfg: &Config, spec_path: &Path, work_dir: &Path) -> Cont
     ContainerCommand {
         args,
         timeout: Duration::from_secs(cfg.docker_timeout),
-        log_path: None,
+        log_path: Some(work_dir.join(".oav/reports/lint/spectral.log")),
     }
 }
 
@@ -47,6 +47,8 @@ pub fn redocly_command(cfg: &Config, spec_path: &Path, work_dir: &Path) -> Conta
     ];
     args.extend(docker::user_args());
     args.extend([
+        "-w".into(),
+        "/work".into(),
         cfg.redocly_image.clone(),
         "lint".into(),
         format!("/work/{spec_name}"),
@@ -57,7 +59,7 @@ pub fn redocly_command(cfg: &Config, spec_path: &Path, work_dir: &Path) -> Conta
     ContainerCommand {
         args,
         timeout: Duration::from_secs(cfg.docker_timeout),
-        log_path: None,
+        log_path: Some(work_dir.join(".oav/reports/lint/redocly.log")),
     }
 }
 
@@ -101,7 +103,7 @@ pub fn generator_command(
     ContainerCommand {
         args,
         timeout: Duration::from_secs(cfg.docker_timeout),
-        log_path: None,
+        log_path: Some(work_dir.join(format!(".oav/reports/generate/{scope}/{generator}.log"))),
     }
 }
 
@@ -131,7 +133,7 @@ pub fn compile_command(
     ContainerCommand {
         args,
         timeout: Duration::from_secs(cfg.docker_timeout),
-        log_path: None,
+        log_path: Some(work_dir.join(format!(".oav/reports/compile/{scope}/{generator}.log"))),
     }
 }
 
@@ -258,6 +260,13 @@ mod tests {
         assert!(cmd.args.contains(&cfg.redocly_image));
         assert!(cmd.args.contains(&"lint".into()));
         assert!(cmd.args.contains(&"/work/spec.yaml".into()));
+        // -w /work sets the container working directory so Redocly discovers redocly.yaml.
+        let w_pos = cmd
+            .args
+            .iter()
+            .position(|a| a == "-w")
+            .expect("-w flag missing");
+        assert_eq!(cmd.args[w_pos + 1], "/work");
     }
 
     #[test]
