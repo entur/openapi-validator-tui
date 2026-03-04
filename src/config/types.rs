@@ -125,6 +125,8 @@ pub struct Config {
     pub search_depth: usize,
     pub jobs: Jobs,
     pub manage_gitignore: bool,
+    #[serde(default)]
+    pub keys: HashMap<String, Vec<String>>,
 }
 
 impl Default for Config {
@@ -150,6 +152,7 @@ impl Default for Config {
             search_depth: 4,
             jobs: Jobs::Auto,
             manage_gitignore: true,
+            keys: HashMap::new(),
         }
     }
 }
