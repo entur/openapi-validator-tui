@@ -23,17 +23,18 @@ pub fn ensure_oav_dirs(work_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Append `.oav/generated/` and `.oav/reports/` to `.gitignore` if not already present.
+/// Ensure `.oav/generated/` and `.oav/reports/` are in `.gitignore`.
 ///
-/// Does nothing if `.gitignore` doesn't exist — we don't create one from scratch.
+/// Creates `.gitignore` if it doesn't exist. Appends missing entries if it does.
 pub fn manage_gitignore(work_dir: &Path) -> Result<()> {
     let gitignore = work_dir.join(".gitignore");
-    if !gitignore.exists() {
-        return Ok(());
-    }
 
-    let content = fs::read_to_string(&gitignore)
-        .with_context(|| format!("failed to read {}", gitignore.display()))?;
+    let content = if gitignore.exists() {
+        fs::read_to_string(&gitignore)
+            .with_context(|| format!("failed to read {}", gitignore.display()))?
+    } else {
+        String::new()
+    };
 
     let mut additions = Vec::new();
     for entry in GITIGNORE_ENTRIES {
@@ -47,7 +48,6 @@ pub fn manage_gitignore(work_dir: &Path) -> Result<()> {
     }
 
     let mut appendix = String::new();
-    // Ensure we start on a new line.
     if !content.ends_with('\n') && !content.is_empty() {
         appendix.push('\n');
     }
@@ -104,10 +104,11 @@ mod tests {
     }
 
     #[test]
-    fn manage_gitignore_skips_missing() {
+    fn manage_gitignore_creates_when_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        // No .gitignore — should return Ok without creating one.
         manage_gitignore(tmp.path()).unwrap();
-        assert!(!tmp.path().join(".gitignore").exists());
+        let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        assert!(content.contains(".oav/generated/"));
+        assert!(content.contains(".oav/reports/"));
     }
 }
