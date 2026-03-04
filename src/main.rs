@@ -588,11 +588,11 @@ fn start_pipeline(app: &mut App) {
     app.browser.diff_state = DiffViewState::new();
     let gen_pairs = pipeline::commands::build_generator_list(&cfg);
     for (generator, scope) in &gen_pairs {
-        let dir_name = format!("{generator}-{scope}");
-        let gen_dir = cwd.join(".generated").join(&dir_name);
+        let key = format!("{scope}/{generator}");
+        let gen_dir = cwd.join(".oav/generated").join(&key);
         if gen_dir.is_dir() {
             let snap = app::diff::snapshot_directory(&gen_dir);
-            app.snapshots.insert(dir_name, snap);
+            app.snapshots.insert(key, snap);
         }
     }
 
@@ -642,8 +642,8 @@ fn drain_pipeline_events(app: &mut App) {
                     {
                         let mut total_changed = 0usize;
                         for step in gen_steps {
-                            let key = format!("{}-{}", step.generator, step.scope);
-                            let gen_dir = cwd.join(".generated").join(&key);
+                            let key = format!("{}/{}", step.scope, step.generator);
+                            let gen_dir = cwd.join(".oav/generated").join(&key);
                             let before = app.snapshots.remove(&key).unwrap_or_default();
                             let diff = app::diff::compute_diff(
                                 &step.generator,

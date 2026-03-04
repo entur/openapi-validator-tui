@@ -78,11 +78,11 @@ impl CodeBrowserState {
         }
     }
 
-    /// Returns the `"{generator}-{scope}"` directory name for the active generator.
+    /// Returns the `"{scope}/{generator}"` relative directory for the active generator.
     pub fn active_generator_dir(&self) -> Option<String> {
         self.generators
             .get(self.generator_index)
-            .map(|(generator, scope)| format!("{generator}-{scope}"))
+            .map(|(generator, scope)| format!("{scope}/{generator}"))
     }
 }
 
@@ -247,7 +247,7 @@ pub struct App {
     pub show_help: bool,
     /// Whether Docker is available on the host.
     pub docker_available: bool,
-    /// Pre-pipeline snapshots of generated output, keyed by `"{gen}-{scope}"`.
+    /// Pre-pipeline snapshots of generated output, keyed by `"{scope}/{generator}"`.
     pub snapshots: HashMap<String, HashMap<PathBuf, String>>,
     /// Draw-cycle counter driving the spinner animation.
     pub tick: usize,
