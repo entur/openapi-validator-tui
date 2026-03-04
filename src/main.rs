@@ -24,6 +24,7 @@ use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::docker::{self, CancelToken};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
+use lazyoav::scaffold;
 
 /// Action returned by `handle_key` to signal the run loop.
 enum Action {
@@ -96,7 +97,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 /// Load spec and report from the current working directory.
 ///
 /// Looks for:
-/// - A `report.json` in the CWD (parsed as a ValidateReport).
+/// - A `.oav/reports/report.json` (parsed as a ValidateReport).
 /// - An OpenAPI spec via config `spec` field, or auto-discovery.
 ///
 /// Surfaces Docker and config errors via `app.status_message`.
@@ -106,6 +107,11 @@ fn load_from_cwd(app: &mut App) {
         Ok(p) => p,
         Err(_) => return,
     };
+
+    // Scaffold .oav/ directories early — warn but don't abort on failure.
+    if let Err(e) = scaffold::ensure_oav_dirs(&cwd) {
+        eprintln!("warning: failed to scaffold .oav/ dirs: {e}");
+    }
 
     // Check Docker availability.
     app.docker_available = docker::ensure_available().is_ok();
@@ -128,8 +134,21 @@ fn load_from_cwd(app: &mut App) {
         }
     };
 
+    // Manage .gitignore if enabled.
+    if cfg.manage_gitignore
+        && let Err(e) = scaffold::manage_gitignore(&cwd)
+    {
+        eprintln!("warning: failed to manage .gitignore: {e}");
+    }
+
+    // Validate config against generator registry.
+    let warnings = config::validate(&cfg);
+    if !warnings.is_empty() {
+        app.set_status(warnings.join("; "), StatusLevel::Warn);
+    }
+
     // Load report if present.
-    let report_path = cwd.join("report.json");
+    let report_path = cwd.join(".oav/reports/report.json");
     if let Ok(report_json) = std::fs::read_to_string(&report_path)
         && let Ok(report) = serde_json::from_str::<pipeline::ValidateReport>(&report_json)
     {

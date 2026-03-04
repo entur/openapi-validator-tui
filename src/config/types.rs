@@ -124,6 +124,7 @@ pub struct Config {
     pub docker_timeout: u64,
     pub search_depth: usize,
     pub jobs: Jobs,
+    pub manage_gitignore: bool,
 }
 
 impl Default for Config {
@@ -148,6 +149,7 @@ impl Default for Config {
             docker_timeout: 300,
             search_depth: 4,
             jobs: Jobs::Auto,
+            manage_gitignore: true,
         }
     }
 }

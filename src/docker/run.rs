@@ -121,6 +121,9 @@ fn orchestrate(
     let log = log_buf.lock().map(|b| b.clone()).unwrap_or_default();
 
     if let Some(path) = log_path {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let _ = std::fs::write(&path, &log);
     }
 
