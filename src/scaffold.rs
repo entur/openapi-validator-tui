@@ -48,10 +48,14 @@ pub fn manage_gitignore(work_dir: &Path) -> Result<()> {
     }
 
     let mut appendix = String::new();
-    if !content.ends_with('\n') && !content.is_empty() {
-        appendix.push('\n');
+    if content.is_empty() {
+        appendix.push_str("# openapi-validator-tui\n");
+    } else {
+        if !content.ends_with('\n') {
+            appendix.push('\n');
+        }
+        appendix.push_str("\n# openapi-validator-tui\n");
     }
-    appendix.push_str("\n# openapi-validator-tui\n");
     for entry in &additions {
         appendix.push_str(entry);
         appendix.push('\n');

@@ -97,7 +97,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 /// Load spec and report from the current working directory.
 ///
 /// Looks for:
-/// - A `report.json` in the CWD (parsed as a ValidateReport).
+/// - A `.oav/reports/report.json` (parsed as a ValidateReport).
 /// - An OpenAPI spec via config `spec` field, or auto-discovery.
 ///
 /// Surfaces Docker and config errors via `app.status_message`.
@@ -143,8 +143,8 @@ fn load_from_cwd(app: &mut App) {
 
     // Validate config against generator registry.
     let warnings = config::validate(&cfg);
-    if let Some(first) = warnings.first() {
-        app.set_status(first.clone(), StatusLevel::Warn);
+    if !warnings.is_empty() {
+        app.set_status(warnings.join("; "), StatusLevel::Warn);
     }
 
     // Load report if present.
