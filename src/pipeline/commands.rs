@@ -190,19 +190,31 @@ pub fn build_generator_list(cfg: &Config) -> Vec<(String, String)> {
 ///
 /// Called before the generate phase so Docker containers can mount them.
 /// Only writes configs for generators that don't have a user override.
-pub fn write_builtin_configs(cfg: &Config, work_dir: &Path, generators: &[(String, String)]) {
+/// Returns an error listing the first generator whose config could not be written.
+pub fn write_builtin_configs(
+    cfg: &Config,
+    work_dir: &Path,
+    generators: &[(String, String)],
+) -> Result<(), String> {
     for (name, scope) in generators {
         if cfg.generator_config_overrides.contains_key(name.as_str()) {
             continue;
         }
         if let Some(def) = crate::generators::find_builtin(name, scope) {
             let config_dir = work_dir.join(format!(".oav/configs/{scope}"));
-            if std::fs::create_dir_all(&config_dir).is_ok() {
-                let config_path = config_dir.join(format!("{name}.yaml"));
-                let _ = std::fs::write(&config_path, def.config_yaml);
-            }
+            std::fs::create_dir_all(&config_dir).map_err(|e| {
+                format!(
+                    "failed to create config directory {}: {e}",
+                    config_dir.display()
+                )
+            })?;
+            let config_path = config_dir.join(format!("{name}.yaml"));
+            std::fs::write(&config_path, def.config_yaml).map_err(|e| {
+                format!("failed to write config file {}: {e}", config_path.display())
+            })?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -368,7 +380,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = test_config();
         let generators = vec![("spring".into(), "server".into())];
-        write_builtin_configs(&cfg, tmp.path(), &generators);
+        write_builtin_configs(&cfg, tmp.path(), &generators).unwrap();
 
         let config_path = tmp.path().join(".oav/configs/server/spring.yaml");
         assert!(config_path.exists());
@@ -383,7 +395,7 @@ mod tests {
         cfg.generator_config_overrides
             .insert("spring".into(), "/work/custom.yaml".into());
         let generators = vec![("spring".into(), "server".into())];
-        write_builtin_configs(&cfg, tmp.path(), &generators);
+        write_builtin_configs(&cfg, tmp.path(), &generators).unwrap();
 
         let config_path = tmp.path().join(".oav/configs/server/spring.yaml");
         assert!(!config_path.exists());

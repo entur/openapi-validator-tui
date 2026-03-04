@@ -77,7 +77,12 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
     let generators = build_generator_list(cfg);
 
     if cfg.generate && !generators.is_empty() {
-        write_builtin_configs(cfg, &input.work_dir, &generators);
+        if let Err(e) = write_builtin_configs(cfg, &input.work_dir, &generators) {
+            let _ = tx.send(PipelineEvent::Aborted(format!(
+                "Failed to write generator configs: {e}"
+            )));
+            return;
+        }
         let gen_results =
             run_steps_parallel(&generators, cfg, &input, &cancel, &tx, StepKind::Generate);
 
