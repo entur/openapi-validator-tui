@@ -5,9 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::fix::FixProposal;
+use lazyoav::keys::{KeyAction, Keymap};
 
 /// Draw the help overlay centered on the screen.
-pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
+pub fn draw_help_overlay(frame: &mut Frame, area: Rect, keymap: &Keymap) {
     let popup = centered_rect(62, 28, area);
 
     frame.render_widget(Clear, popup);
@@ -28,34 +29,69 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect) {
 
     let nav_lines = keybinding_lines(&[
         ("Navigation", None),
-        ("j / ↓", Some("Move down")),
-        ("k / ↑", Some("Move up")),
-        ("Home / <", Some("Jump to first")),
-        ("End / >", Some("Jump to last")),
-        ("PgUp", Some("Page up")),
-        ("PgDn", Some("Page down")),
-        ("Ctrl+U/D", Some("Half-page (detail/spec)")),
-        ("Tab / l", Some("Next panel")),
-        ("S-Tab / h", Some("Previous panel")),
-        ("1-4", Some("Jump to panel")),
+        (keymap.label(KeyAction::ScrollDown), Some("Move down")),
+        (keymap.label(KeyAction::ScrollUp), Some("Move up")),
+        (keymap.label(KeyAction::JumpFirst), Some("Jump to first")),
+        (keymap.label(KeyAction::JumpLast), Some("Jump to last")),
+        (keymap.label(KeyAction::PageUp), Some("Page up")),
+        (keymap.label(KeyAction::PageDown), Some("Page down")),
+        (
+            &format!(
+                "{}/{}",
+                keymap.label(KeyAction::HalfPageUp),
+                keymap.label(KeyAction::HalfPageDown)
+            ),
+            Some("Half-page (detail/spec)"),
+        ),
+        (keymap.label(KeyAction::NextPanel), Some("Next panel")),
+        (keymap.label(KeyAction::PrevPanel), Some("Previous panel")),
+        (
+            &format!(
+                "{} {} {} {}",
+                keymap.label(KeyAction::JumpPanel1),
+                keymap.label(KeyAction::JumpPanel2),
+                keymap.label(KeyAction::JumpPanel3),
+                keymap.label(KeyAction::JumpPanel4),
+            ),
+            Some("Jump to panel"),
+        ),
     ]);
 
     let action_lines = keybinding_lines(&[
         ("Actions", None),
-        ("Enter", Some("Select / focus next")),
-        ("d", Some("Jump to detail")),
-        ("e", Some("Open in $EDITOR")),
-        ("f", Some("Propose fix")),
-        ("r", Some("Run validation")),
-        ("Esc", Some("Cancel validation")),
-        ("+", Some("Expand layout")),
-        ("_", Some("Shrink layout")),
-        ("[/]", Some("Switch detail tab")),
-        ("g", Some("Toggle code browser")),
+        (keymap.label(KeyAction::Select), Some("Select / focus next")),
+        (keymap.label(KeyAction::FocusDetail), Some("Jump to detail")),
+        (keymap.label(KeyAction::OpenEditor), Some("Open in $EDITOR")),
+        (keymap.label(KeyAction::ProposeFix), Some("Propose fix")),
+        (
+            keymap.label(KeyAction::RunValidation),
+            Some("Run validation"),
+        ),
+        (
+            keymap.label(KeyAction::CancelValidation),
+            Some("Cancel validation"),
+        ),
+        (keymap.label(KeyAction::ExpandLayout), Some("Expand layout")),
+        (keymap.label(KeyAction::ShrinkLayout), Some("Shrink layout")),
+        (
+            &format!(
+                "{}/{}",
+                keymap.label(KeyAction::PrevDetailTab),
+                keymap.label(KeyAction::NextDetailTab)
+            ),
+            Some("Switch detail tab"),
+        ),
+        (
+            keymap.label(KeyAction::ToggleView),
+            Some("Toggle code browser"),
+        ),
         ("Code Browser", None),
-        ("d", Some("Toggle generation diff")),
-        ("q", Some("Quit")),
-        ("?", Some("Toggle this help")),
+        (
+            keymap.label(KeyAction::ToggleDiff),
+            Some("Toggle generation diff"),
+        ),
+        (keymap.label(KeyAction::Quit), Some("Quit")),
+        (keymap.label(KeyAction::Help), Some("Toggle this help")),
     ]);
 
     let dismiss = vec![Line::from(Span::styled(

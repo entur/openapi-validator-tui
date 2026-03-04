@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, BrowserPanel, Panel, ScreenMode, StatusLevel, ViewMode};
+use lazyoav::keys::KeyAction;
 
 use super::overlay;
 use super::panels;
@@ -38,7 +39,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 
     if app.show_help {
-        overlay::draw_help_overlay(frame, size);
+        overlay::draw_help_overlay(frame, size, &app.keymap);
     }
 }
 
@@ -86,6 +87,30 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(spinner_len)])
         .split(area);
 
+    let km = &app.keymap;
+
+    // Pre-compute formatted labels (must outlive the if/else block).
+    let scroll_label = format!(
+        "{}/{}",
+        km.label(KeyAction::ScrollDown),
+        km.label(KeyAction::ScrollUp)
+    );
+    let tab_label = format!(
+        "{}/{}",
+        km.label(KeyAction::PrevDetailTab),
+        km.label(KeyAction::NextDetailTab)
+    );
+    let gen_label = format!(
+        "{}/{}",
+        km.label(KeyAction::PrevGenerator),
+        km.label(KeyAction::NextGenerator)
+    );
+    let detail_label = format!(
+        "{}/{}",
+        km.label(KeyAction::Select),
+        km.label(KeyAction::FocusDetail)
+    );
+
     // ── Left side: status message or context-sensitive hints ──
     let left_spans = if let Some(msg) = &app.status_message {
         let color = match msg.level {
@@ -98,10 +123,10 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::raw("  "),
         ];
         if app.validating {
-            push_hint_spans(&mut spans, "Esc", "cancel");
+            push_hint_spans(&mut spans, km.label(KeyAction::CancelValidation), "cancel");
             spans.push(Span::raw("  "));
         }
-        push_hint_spans(&mut spans, "?", "help");
+        push_hint_spans(&mut spans, km.label(KeyAction::Help), "help");
         spans
     } else {
         let mut hints: Vec<(&str, &str)> = if app.view_mode == ViewMode::CodeBrowser {
@@ -109,17 +134,17 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 use crate::app::diff::DiffPanel;
                 match app.browser.diff_state.focus {
                     DiffPanel::FileList => vec![
-                        ("j/k", "navigate"),
-                        ("Enter", "view"),
-                        ("[/]", "generator"),
-                        ("Tab", "panel"),
-                        ("d/Esc", "close diff"),
+                        (scroll_label.as_str(), "navigate"),
+                        (km.label(KeyAction::Select), "view"),
+                        (gen_label.as_str(), "generator"),
+                        (km.label(KeyAction::NextPanel), "panel"),
+                        (km.label(KeyAction::CloseDiff), "close diff"),
                     ],
                     DiffPanel::DiffContent => vec![
-                        ("j/k", "scroll"),
-                        ("[/]", "generator"),
-                        ("Tab", "panel"),
-                        ("d/Esc", "close diff"),
+                        (scroll_label.as_str(), "scroll"),
+                        (gen_label.as_str(), "generator"),
+                        (km.label(KeyAction::NextPanel), "panel"),
+                        (km.label(KeyAction::CloseDiff), "close diff"),
                     ],
                 }
             } else {
@@ -127,21 +152,25 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 match app.browser.browser_focus {
                     BrowserPanel::FileTree => {
                         let mut h = vec![
-                            ("j/k", "navigate"),
-                            ("Enter", "open"),
-                            ("[/]", "generator"),
-                            ("Tab", "panel"),
-                            ("g", "validator"),
+                            (scroll_label.as_str(), "navigate"),
+                            (km.label(KeyAction::Select), "open"),
+                            (gen_label.as_str(), "generator"),
+                            (km.label(KeyAction::NextPanel), "panel"),
+                            (km.label(KeyAction::ToggleView), "validator"),
                         ];
                         if has_diffs {
-                            h.push(("d", "diff"));
+                            h.push((km.label(KeyAction::ToggleDiff), "diff"));
                         }
                         h
                     }
                     BrowserPanel::FileContent => {
-                        let mut h = vec![("j/k", "scroll"), ("Tab", "panel"), ("g", "validator")];
+                        let mut h = vec![
+                            (scroll_label.as_str(), "scroll"),
+                            (km.label(KeyAction::NextPanel), "panel"),
+                            (km.label(KeyAction::ToggleView), "validator"),
+                        ];
                         if has_diffs {
-                            h.push(("d", "diff"));
+                            h.push((km.label(KeyAction::ToggleDiff), "diff"));
                         }
                         h
                     }
@@ -150,26 +179,29 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         } else {
             match app.focused_panel {
                 Panel::Phases => vec![
-                    ("j/k", "navigate"),
-                    ("Enter", "select"),
-                    ("r", "run"),
-                    ("g", "browser"),
+                    (scroll_label.as_str(), "navigate"),
+                    (km.label(KeyAction::Select), "select"),
+                    (km.label(KeyAction::RunValidation), "run"),
+                    (km.label(KeyAction::ToggleView), "browser"),
                 ],
                 Panel::Errors => vec![
-                    ("j/k", "navigate"),
-                    ("Enter/d", "detail"),
-                    ("e", "edit"),
-                    ("f", "fix"),
-                    ("r", "run"),
+                    (scroll_label.as_str(), "navigate"),
+                    (detail_label.as_str(), "detail"),
+                    (km.label(KeyAction::OpenEditor), "edit"),
+                    (km.label(KeyAction::ProposeFix), "fix"),
+                    (km.label(KeyAction::RunValidation), "run"),
                 ],
-                Panel::Detail => vec![("j/k", "scroll"), ("[/]", "tab")],
-                Panel::SpecContext => vec![("j/k", "scroll")],
+                Panel::Detail => vec![
+                    (scroll_label.as_str(), "scroll"),
+                    (tab_label.as_str(), "tab"),
+                ],
+                Panel::SpecContext => vec![(scroll_label.as_str(), "scroll")],
             }
         };
         if app.validating {
-            hints.push(("Esc", "cancel"));
+            hints.push((km.label(KeyAction::CancelValidation), "cancel"));
         }
-        hints.push(("?", "help"));
+        hints.push((km.label(KeyAction::Help), "help"));
 
         let mut spans = Vec::new();
         for (i, (key, action)) in hints.iter().enumerate() {
