@@ -35,6 +35,12 @@ enum Action {
 }
 
 fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("lazyoav {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Ensure terminal is restored on panic.
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
