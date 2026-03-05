@@ -248,69 +248,60 @@ mod tests {
     }
 
     #[test]
-    fn keys_scalar_string_per_action() {
-        let cfg = parse_config(
-            r#"
-keys:
-  scroll_down: "j"
-  quit: "q"
-"#,
-        );
+    fn keys_scalar_string_wraps_into_vec() {
+        let cfg = parse_config("keys:\n  scroll_down: \"j\"\n");
         assert_eq!(cfg.keys["scroll_down"], vec!["j"]);
-        assert_eq!(cfg.keys["quit"], vec!["q"]);
     }
 
     #[test]
-    fn keys_list_of_strings_per_action() {
-        let cfg = parse_config(
-            r#"
-keys:
-  quit: ["q", "C-c"]
-  scroll_down: ["j", "Down"]
-"#,
-        );
+    fn keys_list_survives_custom_deserializer() {
+        // The new StringOrVec deserializer must not break the original list form.
+        let cfg = parse_config("keys:\n  quit: [\"q\", \"C-c\"]\n");
         assert_eq!(cfg.keys["quit"], vec!["q", "C-c"]);
-        assert_eq!(cfg.keys["scroll_down"], vec!["j", "Down"]);
     }
 
     #[test]
     fn keys_empty_list_unbinds() {
-        let cfg = parse_config(
-            r#"
-keys:
-  toggle_diff: []
-"#,
-        );
+        let cfg = parse_config("keys:\n  toggle_diff: []\n");
         assert!(cfg.keys["toggle_diff"].is_empty());
     }
 
     #[test]
-    fn keys_mixed_scalar_and_list() {
-        let cfg = parse_config(
-            r#"
-keys:
-  scroll_down: "j"
-  quit: ["q", "C-c"]
-"#,
-        );
-        assert_eq!(cfg.keys["scroll_down"], vec!["j"]);
-        assert_eq!(cfg.keys["quit"], vec!["q", "C-c"]);
+    fn keys_scalar_round_trips_through_keymap() {
+        // End-to-end: scalar YAML → deserialize → Keymap → correct binding.
+        use crate::keys::{KeyAction, Keymap};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let cfg = parse_config("keys:\n  scroll_down: \"x\"\n");
+        let (km, warnings) = Keymap::from_config(&cfg.keys);
+        assert!(warnings.is_empty());
+
+        let x = crate::keys::KeyInput {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(km.has_action(&x, KeyAction::ScrollDown));
+
+        // Default 'j' should be gone since user override replaces it.
+        let j = crate::keys::KeyInput {
+            code: KeyCode::Char('j'),
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(!km.has_action(&j, KeyAction::ScrollDown));
     }
 
     #[test]
-    fn keys_omitted_defaults_to_empty() {
-        let cfg = parse_config("spec: petstore.yaml\n");
-        assert!(cfg.keys.is_empty());
+    fn keys_bare_y_n_are_strings_not_booleans() {
+        // serde_yaml uses YAML 1.2 where y/n/yes/no are strings, not booleans.
+        // Guard against a serde_yaml upgrade silently breaking single-char bindings.
+        let cfg = parse_config("keys:\n  scroll_down: y\n  scroll_up: n\n");
+        assert_eq!(cfg.keys["scroll_down"], vec!["y"]);
+        assert_eq!(cfg.keys["scroll_up"], vec!["n"]);
     }
 
     #[test]
-    fn keys_invalid_yaml_type_is_rejected() {
-        let result = serde_yaml::from_str::<Config>(
-            r#"
-keys:
-  scroll_down: 42
-"#,
-        );
+    fn keys_integer_value_is_rejected() {
+        let result = serde_yaml::from_str::<Config>("keys:\n  scroll_down: 42\n");
         assert!(result.is_err());
     }
 }
