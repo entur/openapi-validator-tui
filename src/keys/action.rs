@@ -44,6 +44,10 @@ pub enum KeyAction {
     PrevGenerator,
     ToggleDiff,
     CloseDiff,
+
+    // Tracing
+    JumpToGenerated,
+    JumpToSpec,
 }
 
 impl KeyAction {
@@ -79,6 +83,8 @@ impl KeyAction {
         Self::PrevGenerator,
         Self::ToggleDiff,
         Self::CloseDiff,
+        Self::JumpToGenerated,
+        Self::JumpToSpec,
     ];
 
     /// The snake_case name used in `.oavc` config files.
@@ -115,6 +121,8 @@ impl KeyAction {
             Self::PrevGenerator => "prev_generator",
             Self::ToggleDiff => "toggle_diff",
             Self::CloseDiff => "close_diff",
+            Self::JumpToGenerated => "jump_to_generated",
+            Self::JumpToSpec => "jump_to_spec",
         }
     }
 
@@ -151,6 +159,8 @@ impl KeyAction {
             "prev_generator" => Self::PrevGenerator,
             "toggle_diff" => Self::ToggleDiff,
             "close_diff" => Self::CloseDiff,
+            "jump_to_generated" => Self::JumpToGenerated,
+            "jump_to_spec" => Self::JumpToSpec,
             _ => return None,
         })
     }
@@ -177,6 +187,6 @@ mod tests {
     #[test]
     fn all_array_is_exhaustive() {
         // Verify ALL contains the expected count. Update this if variants are added.
-        assert_eq!(KeyAction::ALL.len(), 31);
+        assert_eq!(KeyAction::ALL.len(), 33);
     }
 }

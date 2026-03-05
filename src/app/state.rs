@@ -13,6 +13,8 @@ use lazyoav::docker::CancelToken;
 use lazyoav::keys::Keymap;
 use lazyoav::pipeline::{PipelineEvent, ValidateReport};
 
+use super::trace::{CompileError, TraceIndex};
+
 use super::diff::DiffViewState;
 
 /// Top-level view: validator grid or generated code browser.
@@ -61,6 +63,8 @@ pub struct CodeBrowserState {
     pub highlight_engine: RefCell<HighlightEngine>,
     /// State for the generation diff toggle mode.
     pub diff_state: DiffViewState,
+    /// Bidirectional spec ↔ codegen trace index for the active generator.
+    pub trace_index: Option<TraceIndex>,
 }
 
 impl CodeBrowserState {
@@ -77,6 +81,7 @@ impl CodeBrowserState {
             content_version: 0,
             highlight_engine: RefCell::new(HighlightEngine::new()),
             diff_state: DiffViewState::new(),
+            trace_index: None,
         }
     }
 
@@ -225,6 +230,8 @@ pub struct App {
 
     /// Parsed lint errors from the report's lint log.
     pub lint_errors: Vec<LintError>,
+    /// Parsed compile errors from compile logs, keyed by `"{generator}/{scope}"`.
+    pub compile_errors: HashMap<String, Vec<CompileError>>,
     /// Parsed spec index for source mapping.
     pub spec_index: Option<SpecIndex>,
 
@@ -277,6 +284,7 @@ impl App {
             report: None,
             validating: false,
             lint_errors: Vec::new(),
+            compile_errors: HashMap::new(),
             spec_index: None,
             pipeline_rx: None,
             cancel_token: None,
@@ -357,10 +365,12 @@ impl App {
 
         if let Some(steps) = &report.phases.compile {
             for step in steps {
+                let key = format!("{}/{}", step.generator, step.scope);
+                let error_count = self.compile_errors.get(&key).map(|e| e.len()).unwrap_or(0);
                 entries.push(PhaseEntry {
                     label: format!("Compile ({}/{})", step.generator, step.scope),
                     status: PhaseStatus::from_status_str(&step.status),
-                    error_count: 0,
+                    error_count,
                 });
             }
         }
@@ -383,6 +393,70 @@ impl App {
     pub fn selected_error(&self) -> Option<&LintError> {
         let errors = self.current_errors();
         errors.get(self.error_index)
+    }
+
+    /// Compile errors for the currently selected phase, if it is a compile phase.
+    pub fn current_compile_errors(&self) -> &[CompileError] {
+        let Some(report) = &self.report else {
+            return &[];
+        };
+
+        let mut idx = self.phase_index;
+
+        if report.phases.lint.is_some() {
+            if idx == 0 {
+                return &[];
+            }
+            idx -= 1;
+        }
+
+        if let Some(steps) = &report.phases.generate {
+            if idx < steps.len() {
+                return &[];
+            }
+            idx -= steps.len();
+        }
+
+        if let Some(steps) = &report.phases.compile
+            && idx < steps.len()
+        {
+            let step = &steps[idx];
+            let key = format!("{}/{}", step.generator, step.scope);
+            if let Some(errors) = self.compile_errors.get(&key) {
+                return errors;
+            }
+        }
+
+        &[]
+    }
+
+    /// Returns the (generator, scope) for the currently selected phase if it is
+    /// a compile or generate phase.
+    pub fn selected_phase_generator(&self) -> Option<(&str, &str)> {
+        let report = self.report.as_ref()?;
+        let mut idx = self.phase_index;
+
+        if report.phases.lint.is_some() {
+            if idx == 0 {
+                return None;
+            }
+            idx -= 1;
+        }
+
+        if let Some(steps) = &report.phases.generate {
+            if idx < steps.len() {
+                return Some((&steps[idx].generator, &steps[idx].scope));
+            }
+            idx -= steps.len();
+        }
+
+        if let Some(steps) = &report.phases.compile
+            && idx < steps.len()
+        {
+            return Some((&steps[idx].generator, &steps[idx].scope));
+        }
+
+        None
     }
 
     /// Clamp phase_index and error_index to valid bounds.
