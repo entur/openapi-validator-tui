@@ -238,3 +238,79 @@ impl Default for Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_config(yaml: &str) -> Config {
+        serde_yaml::from_str(yaml).expect("should parse")
+    }
+
+    #[test]
+    fn keys_scalar_string_per_action() {
+        let cfg = parse_config(
+            r#"
+keys:
+  scroll_down: "j"
+  quit: "q"
+"#,
+        );
+        assert_eq!(cfg.keys["scroll_down"], vec!["j"]);
+        assert_eq!(cfg.keys["quit"], vec!["q"]);
+    }
+
+    #[test]
+    fn keys_list_of_strings_per_action() {
+        let cfg = parse_config(
+            r#"
+keys:
+  quit: ["q", "C-c"]
+  scroll_down: ["j", "Down"]
+"#,
+        );
+        assert_eq!(cfg.keys["quit"], vec!["q", "C-c"]);
+        assert_eq!(cfg.keys["scroll_down"], vec!["j", "Down"]);
+    }
+
+    #[test]
+    fn keys_empty_list_unbinds() {
+        let cfg = parse_config(
+            r#"
+keys:
+  toggle_diff: []
+"#,
+        );
+        assert!(cfg.keys["toggle_diff"].is_empty());
+    }
+
+    #[test]
+    fn keys_mixed_scalar_and_list() {
+        let cfg = parse_config(
+            r#"
+keys:
+  scroll_down: "j"
+  quit: ["q", "C-c"]
+"#,
+        );
+        assert_eq!(cfg.keys["scroll_down"], vec!["j"]);
+        assert_eq!(cfg.keys["quit"], vec!["q", "C-c"]);
+    }
+
+    #[test]
+    fn keys_omitted_defaults_to_empty() {
+        let cfg = parse_config("spec: petstore.yaml\n");
+        assert!(cfg.keys.is_empty());
+    }
+
+    #[test]
+    fn keys_invalid_yaml_type_is_rejected() {
+        let result = serde_yaml::from_str::<Config>(
+            r#"
+keys:
+  scroll_down: 42
+"#,
+        );
+        assert!(result.is_err());
+    }
+}
