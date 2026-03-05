@@ -13,13 +13,22 @@ const OAV_DIRS: &[&str] = &[
 
 const GITIGNORE_ENTRIES: &[&str] = &[".oav/generated/", ".oav/reports/"];
 
-/// Create the `.oav/` directory tree under `work_dir`.
+const DOCKER_COMPOSE_YAML: &str = include_str!("../assets/docker-compose.yaml");
+
+/// Create the `.oav/` directory tree under `work_dir` and extract embedded assets.
 pub fn ensure_oav_dirs(work_dir: &Path) -> Result<()> {
     for dir in OAV_DIRS {
         let path = work_dir.join(dir);
         fs::create_dir_all(&path)
             .with_context(|| format!("failed to create {}", path.display()))?;
     }
+
+    let compose_path = work_dir.join(".oav/docker-compose.yaml");
+    if !compose_path.exists() {
+        fs::write(&compose_path, DOCKER_COMPOSE_YAML)
+            .with_context(|| format!("failed to write {}", compose_path.display()))?;
+    }
+
     Ok(())
 }
 
@@ -78,6 +87,30 @@ mod tests {
         for dir in OAV_DIRS {
             assert!(tmp.path().join(dir).is_dir(), "{dir} not created");
         }
+    }
+
+    #[test]
+    fn ensure_oav_dirs_writes_compose_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        ensure_oav_dirs(tmp.path()).unwrap();
+        let compose = tmp.path().join(".oav/docker-compose.yaml");
+        assert!(compose.exists());
+        let content = fs::read_to_string(&compose).unwrap();
+        assert!(content.contains("build-spring"));
+        assert!(content.contains("build-client-typescript-axios"));
+    }
+
+    #[test]
+    fn ensure_oav_dirs_preserves_existing_compose() {
+        let tmp = tempfile::tempdir().unwrap();
+        let compose = tmp.path().join(".oav/docker-compose.yaml");
+        fs::create_dir_all(compose.parent().unwrap()).unwrap();
+        fs::write(&compose, "custom content").unwrap();
+
+        ensure_oav_dirs(tmp.path()).unwrap();
+
+        let content = fs::read_to_string(&compose).unwrap();
+        assert_eq!(content, "custom content");
     }
 
     #[test]
