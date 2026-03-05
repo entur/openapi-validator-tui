@@ -12,7 +12,6 @@ pub struct Keymap {
 }
 
 impl Keymap {
-    /// Build the default keymap with all hardcoded bindings.
     pub fn default_keymap() -> Self {
         let bindings = default_bindings();
         Self::from_bindings(bindings)
@@ -53,7 +52,6 @@ impl Keymap {
         (Self::from_bindings(bindings), warnings)
     }
 
-    /// Look up all actions bound to a given input.
     pub fn actions_for(&self, input: &KeyInput) -> &[KeyAction] {
         self.key_to_actions
             .get(input)
@@ -61,12 +59,10 @@ impl Keymap {
             .unwrap_or(&[])
     }
 
-    /// Check if a given input is bound to a specific action.
     pub fn has_action(&self, input: &KeyInput, action: KeyAction) -> bool {
         self.actions_for(input).contains(&action)
     }
 
-    /// Get the display label for an action (e.g. `"j/↓"` for ScrollDown).
     pub fn label(&self, action: KeyAction) -> &str {
         self.labels.get(&action).map(|s| s.as_str()).unwrap_or("")
     }
@@ -76,7 +72,6 @@ impl Keymap {
         let mut labels: HashMap<KeyAction, String> = HashMap::new();
 
         for (action, keys) in &bindings {
-            // Build label from display strings.
             let label: String = keys
                 .iter()
                 .map(|k| k.display())
@@ -84,7 +79,6 @@ impl Keymap {
                 .join("/");
             labels.insert(*action, label);
 
-            // Register reverse mapping.
             for key in keys {
                 key_to_actions.entry(*key).or_default().push(*action);
             }
@@ -97,7 +91,6 @@ impl Keymap {
     }
 }
 
-/// All default bindings, matching the original hardcoded keys.
 fn default_bindings() -> Vec<(KeyAction, Vec<KeyInput>)> {
     use KeyAction::*;
     vec![

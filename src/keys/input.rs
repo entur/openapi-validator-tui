@@ -45,7 +45,6 @@ impl KeyInput {
     /// - Ctrl modifier: `"C-d"`, `"C-c"`, `"C-u"`
     /// - Shift modifier: `"S-Tab"`
     pub fn parse(s: &str) -> Result<Self, String> {
-        // Ctrl modifier
         if let Some(rest) = s.strip_prefix("C-") {
             if rest.chars().count() == 1 {
                 let c = rest.chars().next().unwrap().to_ascii_lowercase();
@@ -57,7 +56,6 @@ impl KeyInput {
             return Err(format!("invalid Ctrl binding: {s}"));
         }
 
-        // Shift modifier
         if let Some(rest) = s.strip_prefix("S-") {
             let code =
                 parse_named_key(rest).ok_or_else(|| format!("unknown key after S-: {rest}"))?;
@@ -67,7 +65,6 @@ impl KeyInput {
             });
         }
 
-        // Named keys (case-insensitive match on common names)
         if s.chars().count() > 1 {
             let code = parse_named_key(s).ok_or_else(|| format!("unknown key: {s}"))?;
             return Ok(Self {
@@ -76,7 +73,6 @@ impl KeyInput {
             });
         }
 
-        // Single character
         if let Some(c) = s.chars().next() {
             return Ok(Self {
                 code: KeyCode::Char(c),
@@ -128,7 +124,6 @@ impl KeyInput {
 }
 
 fn parse_named_key(s: &str) -> Option<KeyCode> {
-    // Case-insensitive matching for named keys.
     Some(match s {
         "Enter" | "enter" | "Return" | "return" => KeyCode::Enter,
         "Esc" | "esc" | "Escape" | "escape" => KeyCode::Esc,

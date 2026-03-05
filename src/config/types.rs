@@ -167,7 +167,6 @@ where
     deserializer.deserialize_map(KeysVisitor)
 }
 
-/// Helper for deserializing either a single string or a list of strings.
 #[derive(Debug)]
 enum StringOrVec {
     Single(String),
@@ -268,22 +267,20 @@ mod tests {
 
     #[test]
     fn keys_scalar_round_trips_through_keymap() {
-        // End-to-end: scalar YAML → deserialize → Keymap → correct binding.
-        use crate::keys::{KeyAction, Keymap};
+        use crate::keys::{KeyAction, KeyInput, Keymap};
         use crossterm::event::{KeyCode, KeyModifiers};
 
         let cfg = parse_config("keys:\n  scroll_down: \"x\"\n");
         let (km, warnings) = Keymap::from_config(&cfg.keys);
         assert!(warnings.is_empty());
 
-        let x = crate::keys::KeyInput {
+        let x = KeyInput {
             code: KeyCode::Char('x'),
             modifiers: KeyModifiers::NONE,
         };
         assert!(km.has_action(&x, KeyAction::ScrollDown));
 
-        // Default 'j' should be gone since user override replaces it.
-        let j = crate::keys::KeyInput {
+        let j = KeyInput {
             code: KeyCode::Char('j'),
             modifiers: KeyModifiers::NONE,
         };
