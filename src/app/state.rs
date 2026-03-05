@@ -9,6 +9,7 @@ use crate::log_parser::LintError;
 use crate::spec::SpecIndex;
 use lazyoav::config::Config;
 use lazyoav::docker::CancelToken;
+use lazyoav::keys::Keymap;
 use lazyoav::pipeline::{PipelineEvent, ValidateReport};
 
 use super::diff::DiffViewState;
@@ -253,6 +254,8 @@ pub struct App {
     pub tick: usize,
     /// Syntax highlight engine (behind RefCell for interior mutability in draw).
     pub highlight_engine: RefCell<HighlightEngine>,
+    /// Keybinding map (default or user-customized from .oavc).
+    pub keymap: Keymap,
 }
 
 impl App {
@@ -284,6 +287,7 @@ impl App {
             snapshots: HashMap::new(),
             tick: 0,
             highlight_engine: RefCell::new(HighlightEngine::new()),
+            keymap: Keymap::default_keymap(),
         }
     }
 

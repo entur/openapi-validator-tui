@@ -13,7 +13,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
@@ -23,6 +23,7 @@ use app::diff::{DiffPanel, DiffViewState};
 use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::docker::{self, CancelToken};
+use lazyoav::keys::{KeyAction, KeyInput};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
 use lazyoav::scaffold;
 
@@ -172,6 +173,15 @@ fn load_from_cwd(app: &mut App) {
         app.set_status("No OpenAPI spec found", StatusLevel::Info);
     }
 
+    // Build keymap from config, surfacing warnings.
+    if !cfg.keys.is_empty() {
+        let (keymap, key_warnings) = lazyoav::keys::Keymap::from_config(&cfg.keys);
+        app.keymap = keymap;
+        if !key_warnings.is_empty() {
+            app.set_status(key_warnings.join("; "), StatusLevel::Warn);
+        }
+    }
+
     app.config = Some(cfg);
     app.clamp_indices();
 
@@ -202,7 +212,7 @@ fn resolve_spec_path(cwd: &Path, cfg: &config::Config) -> Option<std::path::Path
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Action {
-    // Fix overlay: handle accept/skip/cancel before anything else.
+    // Fix overlay: handle accept/skip/cancel before anything else (stays hardcoded).
     if app.fix_proposal.is_some() {
         match key.code {
             KeyCode::Char('y') => {
@@ -241,7 +251,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
         }
     }
 
-    // Help overlay: any key dismisses it.
+    // Help overlay: any key dismisses it (stays hardcoded).
     if app.show_help {
         app.show_help = false;
         return Action::None;
@@ -250,160 +260,160 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
     // Clear transient status on any keypress.
     app.status_message = None;
 
-    // Global keys.
-    match (key.code, key.modifiers) {
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
-            app.running = false;
-            return Action::None;
+    let input = KeyInput::from_event(key);
+    let has = |a: KeyAction| app.keymap.has_action(&input, a);
+
+    // Dispatch priority: when one key maps to multiple actions, the first
+    // matching branch wins. Order: global → view-specific → panel nav → panel content.
+    // This is intentional — context (view mode, focused panel) resolves ambiguity.
+    if has(KeyAction::Quit) {
+        app.running = false;
+        return Action::None;
+    }
+    if has(KeyAction::Help) {
+        app.show_help = true;
+        return Action::None;
+    }
+    if has(KeyAction::ExpandLayout) {
+        app.screen_mode = app.screen_mode.cycle_next();
+        return Action::None;
+    }
+    if has(KeyAction::ShrinkLayout) {
+        app.screen_mode = app.screen_mode.cycle_prev();
+        return Action::None;
+    }
+    if has(KeyAction::RunValidation) {
+        start_pipeline(app);
+        return Action::None;
+    }
+    if has(KeyAction::CancelValidation) && app.validating {
+        if let Some(token) = &app.cancel_token {
+            token.cancel();
         }
-        (KeyCode::Char('?'), _) => {
-            app.show_help = true;
-            return Action::None;
-        }
-        (KeyCode::Char('+'), _) => {
-            app.screen_mode = app.screen_mode.cycle_next();
-            return Action::None;
-        }
-        (KeyCode::Char('_'), _) => {
-            app.screen_mode = app.screen_mode.cycle_prev();
-            return Action::None;
-        }
-        // Run validation pipeline (cancels any in-progress run).
-        (KeyCode::Char('r'), _) => {
-            start_pipeline(app);
-            return Action::None;
-        }
-        // Cancel running validation.
-        (KeyCode::Esc, _) if app.validating => {
-            if let Some(token) = &app.cancel_token {
-                token.cancel();
-            }
-            return Action::None;
-        }
-        // Toggle between validator and code browser views.
-        (KeyCode::Char('g'), _) => {
-            match app.view_mode {
-                ViewMode::Validator => {
-                    sync_generators_from_report(app);
-                    if let Ok(cwd) = std::env::current_dir() {
-                        app::browser::refresh_file_tree(&mut app.browser, &cwd);
-                    }
-                    app.view_mode = ViewMode::CodeBrowser;
+        return Action::None;
+    }
+    if has(KeyAction::ToggleView) {
+        match app.view_mode {
+            ViewMode::Validator => {
+                sync_generators_from_report(app);
+                if let Ok(cwd) = std::env::current_dir() {
+                    app::browser::refresh_file_tree(&mut app.browser, &cwd);
                 }
-                ViewMode::CodeBrowser => {
-                    app.view_mode = ViewMode::Validator;
-                }
+                app.view_mode = ViewMode::CodeBrowser;
             }
-            return Action::None;
+            ViewMode::CodeBrowser => {
+                app.view_mode = ViewMode::Validator;
+            }
         }
-        _ => {}
+        return Action::None;
     }
 
     // Early return for browser-specific keys.
     if app.view_mode == ViewMode::CodeBrowser {
-        return handle_browser_key(app, key);
+        return handle_browser_key(app, input);
     }
 
     // Panel switching.
-    match key.code {
-        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-            app.focused_panel = app.focused_panel.next();
-            return Action::None;
+    if has(KeyAction::NextPanel) {
+        app.focused_panel = app.focused_panel.next();
+        return Action::None;
+    }
+    if has(KeyAction::PrevPanel) {
+        app.focused_panel = app.focused_panel.prev();
+        return Action::None;
+    }
+    if has(KeyAction::JumpPanel1) {
+        if let Some(p) = Panel::from_index(0) {
+            app.focused_panel = p;
         }
-        KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-            app.focused_panel = app.focused_panel.prev();
-            return Action::None;
+        return Action::None;
+    }
+    if has(KeyAction::JumpPanel2) {
+        if let Some(p) = Panel::from_index(1) {
+            app.focused_panel = p;
         }
-        KeyCode::Char(c @ '1'..='4') => {
-            if let Some(panel) = Panel::from_index((c as usize) - ('1' as usize)) {
-                app.focused_panel = panel;
-            }
-            return Action::None;
+        return Action::None;
+    }
+    if has(KeyAction::JumpPanel3) {
+        if let Some(p) = Panel::from_index(2) {
+            app.focused_panel = p;
         }
-        _ => {}
+        return Action::None;
+    }
+    if has(KeyAction::JumpPanel4) {
+        if let Some(p) = Panel::from_index(3) {
+            app.focused_panel = p;
+        }
+        return Action::None;
     }
 
     // Panel-specific keys.
     match app.focused_panel {
-        Panel::Phases => match (key.code, key.modifiers) {
-            (KeyCode::Down | KeyCode::Char('j'), _) => {
+        Panel::Phases => {
+            if has(KeyAction::ScrollDown) {
                 app.phase_index = app.phase_index.saturating_add(1);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::Up | KeyCode::Char('k'), _) => {
+            } else if has(KeyAction::ScrollUp) {
                 app.phase_index = app.phase_index.saturating_sub(1);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::Home | KeyCode::Char('<'), _) => {
+            } else if has(KeyAction::JumpFirst) {
                 app.phase_index = 0;
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::End | KeyCode::Char('>'), _) => {
+            } else if has(KeyAction::JumpLast) {
                 let count = app.phase_count();
                 app.phase_index = count.saturating_sub(1);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::PageUp, _) => {
+            } else if has(KeyAction::PageUp) {
                 app.phase_index = app.phase_index.saturating_sub(10);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::PageDown, _) => {
+            } else if has(KeyAction::PageDown) {
                 app.phase_index = app.phase_index.saturating_add(10);
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::Enter, _) => {
+            } else if has(KeyAction::Select) {
                 app.focused_panel = Panel::Errors;
             }
-            _ => {}
-        },
-        Panel::Errors => match (key.code, key.modifiers) {
-            (KeyCode::Down | KeyCode::Char('j'), _) => {
+        }
+        Panel::Errors => {
+            if has(KeyAction::ScrollDown) {
                 app.error_index = app.error_index.saturating_add(1);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::Up | KeyCode::Char('k'), _) => {
+            } else if has(KeyAction::ScrollUp) {
                 app.error_index = app.error_index.saturating_sub(1);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::Home | KeyCode::Char('<'), _) => {
+            } else if has(KeyAction::JumpFirst) {
                 app.error_index = 0;
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::End | KeyCode::Char('>'), _) => {
+            } else if has(KeyAction::JumpLast) {
                 let count = app.current_errors().len();
                 app.error_index = count.saturating_sub(1);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::PageUp, _) => {
+            } else if has(KeyAction::PageUp) {
                 app.error_index = app.error_index.saturating_sub(10);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::PageDown, _) => {
+            } else if has(KeyAction::PageDown) {
                 app.error_index = app.error_index.saturating_add(10);
                 app.detail_scroll = 0;
                 app.spec_scroll = 0;
-            }
-            (KeyCode::Enter | KeyCode::Char('d'), _) => {
+            } else if has(KeyAction::Select) || has(KeyAction::FocusDetail) {
                 app.focused_panel = Panel::Detail;
-            }
-            (KeyCode::Char('e'), _) => {
+            } else if has(KeyAction::OpenEditor) {
                 let Some(error) = app.selected_error() else {
                     app.set_status("No error selected", StatusLevel::Info);
                     return Action::None;
@@ -414,8 +424,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                     return Action::None;
                 };
                 return Action::OpenEditor { path, line };
-            }
-            (KeyCode::Char('f'), _) => {
+            } else if has(KeyAction::ProposeFix) {
                 let Some(error) = app.selected_error().cloned() else {
                     app.set_status("No error selected", StatusLevel::Info);
                     return Action::None;
@@ -443,52 +452,41 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                     }
                 }
             }
-            _ => {}
-        },
-        Panel::Detail => match (key.code, key.modifiers) {
-            (KeyCode::Down | KeyCode::Char('j'), _) => {
+        }
+        Panel::Detail => {
+            if has(KeyAction::ScrollDown) {
                 app.detail_scroll = app.detail_scroll.saturating_add(1);
-            }
-            (KeyCode::Up | KeyCode::Char('k'), _) => {
+            } else if has(KeyAction::ScrollUp) {
                 app.detail_scroll = app.detail_scroll.saturating_sub(1);
-            }
-            (KeyCode::Home | KeyCode::Char('<'), _) => {
+            } else if has(KeyAction::JumpFirst) {
                 app.detail_scroll = 0;
-            }
-            (KeyCode::End | KeyCode::Char('>'), _) => {
+            } else if has(KeyAction::JumpLast) {
                 app.detail_scroll = u16::MAX;
-            }
-            (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            } else if has(KeyAction::PageUp) || has(KeyAction::HalfPageUp) {
                 app.detail_scroll = app.detail_scroll.saturating_sub(20);
-            }
-            (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            } else if has(KeyAction::PageDown) || has(KeyAction::HalfPageDown) {
                 app.detail_scroll = app.detail_scroll.saturating_add(20);
+            } else if has(KeyAction::NextDetailTab) {
+                app.detail_tab = (app.detail_tab + 1) % 3;
+            } else if has(KeyAction::PrevDetailTab) {
+                app.detail_tab = (app.detail_tab + 2) % 3;
             }
-            (KeyCode::Char(']'), _) => app.detail_tab = (app.detail_tab + 1) % 3,
-            (KeyCode::Char('['), _) => app.detail_tab = (app.detail_tab + 2) % 3,
-            _ => {}
-        },
-        Panel::SpecContext => match (key.code, key.modifiers) {
-            (KeyCode::Down | KeyCode::Char('j'), _) => {
+        }
+        Panel::SpecContext => {
+            if has(KeyAction::ScrollDown) {
                 app.spec_scroll = app.spec_scroll.saturating_add(1);
-            }
-            (KeyCode::Up | KeyCode::Char('k'), _) => {
+            } else if has(KeyAction::ScrollUp) {
                 app.spec_scroll = app.spec_scroll.saturating_sub(1);
-            }
-            (KeyCode::Home | KeyCode::Char('<'), _) => {
+            } else if has(KeyAction::JumpFirst) {
                 app.spec_scroll = 0;
-            }
-            (KeyCode::End | KeyCode::Char('>'), _) => {
+            } else if has(KeyAction::JumpLast) {
                 app.spec_scroll = u16::MAX;
-            }
-            (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            } else if has(KeyAction::PageUp) || has(KeyAction::HalfPageUp) {
                 app.spec_scroll = app.spec_scroll.saturating_sub(20);
-            }
-            (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            } else if has(KeyAction::PageDown) || has(KeyAction::HalfPageDown) {
                 app.spec_scroll = app.spec_scroll.saturating_add(20);
             }
-            _ => {}
-        },
+        }
     }
 
     Action::None
@@ -744,50 +742,50 @@ fn sync_generators_from_report(app: &mut App) {
 }
 
 /// Handle keys when the code browser view is active.
-fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
+fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
     if app.browser.diff_state.active {
-        return handle_diff_key(app, key);
+        return handle_diff_key(app, input);
     }
 
-    match (key.code, key.modifiers) {
-        (KeyCode::Char('d'), KeyModifiers::NONE) => {
-            if app.browser.diff_state.diffs.is_empty() {
-                app.set_status("No diff data available", StatusLevel::Info);
-            } else {
-                activate_diff_mode(app);
-            }
-            return Action::None;
-        }
-        // Panel focus switching.
-        (KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'), _) => {
-            app.browser.browser_focus = BrowserPanel::FileContent;
-        }
-        (KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h'), _) => {
-            app.browser.browser_focus = BrowserPanel::FileTree;
-        }
+    let has = |a: KeyAction| app.keymap.has_action(&input, a);
 
-        // Generator cycling.
-        (KeyCode::Char(']'), _) => {
-            if !app.browser.generators.is_empty() {
-                app.browser.generator_index =
-                    (app.browser.generator_index + 1) % app.browser.generators.len();
-                if let Ok(cwd) = std::env::current_dir() {
-                    app::browser::refresh_file_tree(&mut app.browser, &cwd);
-                }
-            }
+    // ToggleDiff (only fires in browser context, not diff).
+    if has(KeyAction::ToggleDiff) {
+        if app.browser.diff_state.diffs.is_empty() {
+            app.set_status("No diff data available", StatusLevel::Info);
+        } else {
+            activate_diff_mode(app);
         }
-        (KeyCode::Char('['), _) => {
-            if !app.browser.generators.is_empty() {
-                let len = app.browser.generators.len();
-                app.browser.generator_index = (app.browser.generator_index + len - 1) % len;
-                if let Ok(cwd) = std::env::current_dir() {
-                    app::browser::refresh_file_tree(&mut app.browser, &cwd);
-                }
-            }
-        }
+        return Action::None;
+    }
 
-        // Navigation — dispatched based on focused sub-panel.
-        (KeyCode::Down | KeyCode::Char('j'), _) => match app.browser.browser_focus {
+    // Panel focus switching.
+    if has(KeyAction::NextPanel) {
+        app.browser.browser_focus = BrowserPanel::FileContent;
+    } else if has(KeyAction::PrevPanel) {
+        app.browser.browser_focus = BrowserPanel::FileTree;
+    }
+    // Generator cycling.
+    else if has(KeyAction::NextGenerator) {
+        if !app.browser.generators.is_empty() {
+            app.browser.generator_index =
+                (app.browser.generator_index + 1) % app.browser.generators.len();
+            if let Ok(cwd) = std::env::current_dir() {
+                app::browser::refresh_file_tree(&mut app.browser, &cwd);
+            }
+        }
+    } else if has(KeyAction::PrevGenerator) {
+        if !app.browser.generators.is_empty() {
+            let len = app.browser.generators.len();
+            app.browser.generator_index = (app.browser.generator_index + len - 1) % len;
+            if let Ok(cwd) = std::env::current_dir() {
+                app::browser::refresh_file_tree(&mut app.browser, &cwd);
+            }
+        }
+    }
+    // Navigation — dispatched based on focused sub-panel.
+    else if has(KeyAction::ScrollDown) {
+        match app.browser.browser_focus {
             BrowserPanel::FileTree => {
                 let max = app.browser.file_tree.len().saturating_sub(1);
                 app.browser.file_index = (app.browser.file_index + 1).min(max);
@@ -795,36 +793,41 @@ fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
             BrowserPanel::FileContent => {
                 app.browser.file_scroll = app.browser.file_scroll.saturating_add(1);
             }
-        },
-        (KeyCode::Up | KeyCode::Char('k'), _) => match app.browser.browser_focus {
+        }
+    } else if has(KeyAction::ScrollUp) {
+        match app.browser.browser_focus {
             BrowserPanel::FileTree => {
                 app.browser.file_index = app.browser.file_index.saturating_sub(1);
             }
             BrowserPanel::FileContent => {
                 app.browser.file_scroll = app.browser.file_scroll.saturating_sub(1);
             }
-        },
-        (KeyCode::Home, _) => match app.browser.browser_focus {
+        }
+    } else if has(KeyAction::JumpFirst) {
+        match app.browser.browser_focus {
             BrowserPanel::FileTree => app.browser.file_index = 0,
             BrowserPanel::FileContent => app.browser.file_scroll = 0,
-        },
-        (KeyCode::End, _) => match app.browser.browser_focus {
+        }
+    } else if has(KeyAction::JumpLast) {
+        match app.browser.browser_focus {
             BrowserPanel::FileTree => {
                 app.browser.file_index = app.browser.file_tree.len().saturating_sub(1);
             }
             BrowserPanel::FileContent => {
                 app.browser.file_scroll = u16::MAX;
             }
-        },
-        (KeyCode::PageUp, _) => match app.browser.browser_focus {
+        }
+    } else if has(KeyAction::PageUp) {
+        match app.browser.browser_focus {
             BrowserPanel::FileTree => {
                 app.browser.file_index = app.browser.file_index.saturating_sub(10);
             }
             BrowserPanel::FileContent => {
                 app.browser.file_scroll = app.browser.file_scroll.saturating_sub(20);
             }
-        },
-        (KeyCode::PageDown, _) => match app.browser.browser_focus {
+        }
+    } else if has(KeyAction::PageDown) {
+        match app.browser.browser_focus {
             BrowserPanel::FileTree => {
                 let max = app.browser.file_tree.len().saturating_sub(1);
                 app.browser.file_index = (app.browser.file_index + 10).min(max);
@@ -832,24 +835,20 @@ fn handle_browser_key(app: &mut App, key: KeyEvent) -> Action {
             BrowserPanel::FileContent => {
                 app.browser.file_scroll = app.browser.file_scroll.saturating_add(20);
             }
-        },
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-            app.browser.file_scroll = app.browser.file_scroll.saturating_sub(20);
         }
-        (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-            app.browser.file_scroll = app.browser.file_scroll.saturating_add(20);
-        }
-
-        // Open file.
-        (KeyCode::Enter, _) if app.browser.browser_focus == BrowserPanel::FileTree => {
-            app::browser::load_selected_file(&mut app.browser);
-            if app.browser.file_content.is_some() {
-                app.browser.browser_focus = BrowserPanel::FileContent;
-            }
-        }
-
-        _ => {}
+    } else if has(KeyAction::HalfPageUp) {
+        app.browser.file_scroll = app.browser.file_scroll.saturating_sub(20);
+    } else if has(KeyAction::HalfPageDown) {
+        app.browser.file_scroll = app.browser.file_scroll.saturating_add(20);
     }
+    // Open file.
+    else if has(KeyAction::Select) && app.browser.browser_focus == BrowserPanel::FileTree {
+        app::browser::load_selected_file(&mut app.browser);
+        if app.browser.file_content.is_some() {
+            app.browser.browser_focus = BrowserPanel::FileContent;
+        }
+    }
+
     Action::None
 }
 
@@ -870,28 +869,24 @@ fn activate_diff_mode(app: &mut App) {
     };
 }
 
-fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
-    match (key.code, key.modifiers) {
-        (KeyCode::Char('d'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
-            app.browser.diff_state.active = false;
-        }
+fn handle_diff_key(app: &mut App, input: KeyInput) -> Action {
+    let has = |a: KeyAction| app.keymap.has_action(&input, a);
 
-        (KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'), _) => {
-            app.browser.diff_state.focus = DiffPanel::DiffContent;
-        }
-        (KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h'), _) => {
-            app.browser.diff_state.focus = DiffPanel::FileList;
-        }
-
-        (KeyCode::Enter, _) if app.browser.diff_state.focus == DiffPanel::FileList => {
-            app.browser.diff_state.scroll = 0;
-            app.browser.diff_state.focus = DiffPanel::DiffContent;
-        }
-
-        (KeyCode::Char(']'), _) => cycle_diff_generator(app, true),
-        (KeyCode::Char('['), _) => cycle_diff_generator(app, false),
-
-        (KeyCode::Down | KeyCode::Char('j'), _) => match app.browser.diff_state.focus {
+    if has(KeyAction::CloseDiff) {
+        app.browser.diff_state.active = false;
+    } else if has(KeyAction::NextPanel) {
+        app.browser.diff_state.focus = DiffPanel::DiffContent;
+    } else if has(KeyAction::PrevPanel) {
+        app.browser.diff_state.focus = DiffPanel::FileList;
+    } else if has(KeyAction::Select) && app.browser.diff_state.focus == DiffPanel::FileList {
+        app.browser.diff_state.scroll = 0;
+        app.browser.diff_state.focus = DiffPanel::DiffContent;
+    } else if has(KeyAction::NextGenerator) {
+        cycle_diff_generator(app, true);
+    } else if has(KeyAction::PrevGenerator) {
+        cycle_diff_generator(app, false);
+    } else if has(KeyAction::ScrollDown) {
+        match app.browser.diff_state.focus {
             DiffPanel::FileList => {
                 let max = app
                     .browser
@@ -905,8 +900,9 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
             DiffPanel::DiffContent => {
                 app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(1);
             }
-        },
-        (KeyCode::Up | KeyCode::Char('k'), _) => match app.browser.diff_state.focus {
+        }
+    } else if has(KeyAction::ScrollUp) {
+        match app.browser.diff_state.focus {
             DiffPanel::FileList => {
                 app.browser.diff_state.file_index =
                     app.browser.diff_state.file_index.saturating_sub(1);
@@ -914,12 +910,14 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
             DiffPanel::DiffContent => {
                 app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(1);
             }
-        },
-        (KeyCode::Home, _) => match app.browser.diff_state.focus {
+        }
+    } else if has(KeyAction::JumpFirst) {
+        match app.browser.diff_state.focus {
             DiffPanel::FileList => app.browser.diff_state.file_index = 0,
             DiffPanel::DiffContent => app.browser.diff_state.scroll = 0,
-        },
-        (KeyCode::End, _) => match app.browser.diff_state.focus {
+        }
+    } else if has(KeyAction::JumpLast) {
+        match app.browser.diff_state.focus {
             DiffPanel::FileList => {
                 let max = app
                     .browser
@@ -932,8 +930,9 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
             DiffPanel::DiffContent => {
                 app.browser.diff_state.scroll = u16::MAX;
             }
-        },
-        (KeyCode::PageUp, _) => match app.browser.diff_state.focus {
+        }
+    } else if has(KeyAction::PageUp) {
+        match app.browser.diff_state.focus {
             DiffPanel::FileList => {
                 app.browser.diff_state.file_index =
                     app.browser.diff_state.file_index.saturating_sub(10);
@@ -941,8 +940,9 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
             DiffPanel::DiffContent => {
                 app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(20);
             }
-        },
-        (KeyCode::PageDown, _) => match app.browser.diff_state.focus {
+        }
+    } else if has(KeyAction::PageDown) {
+        match app.browser.diff_state.focus {
             DiffPanel::FileList => {
                 let max = app
                     .browser
@@ -956,16 +956,13 @@ fn handle_diff_key(app: &mut App, key: KeyEvent) -> Action {
             DiffPanel::DiffContent => {
                 app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(20);
             }
-        },
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-            app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(20);
         }
-        (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-            app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(20);
-        }
-
-        _ => {}
+    } else if has(KeyAction::HalfPageUp) {
+        app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_sub(20);
+    } else if has(KeyAction::HalfPageDown) {
+        app.browser.diff_state.scroll = app.browser.diff_state.scroll.saturating_add(20);
     }
+
     Action::None
 }
 
