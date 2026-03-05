@@ -107,33 +107,45 @@ pub fn generator_command(
     }
 }
 
-/// Build a `docker run` command for compiling generated code.
+/// Build a `docker compose` command for compiling generated code.
+///
+/// Uses the embedded `docker-compose.yaml` with per-language build services,
+/// matching the CLI's compile approach. Service naming convention:
+/// - Server generators: `build-{generator}`
+/// - Client generators: `build-client-{generator}`
 pub fn compile_command(
     cfg: &Config,
     work_dir: &Path,
     generator: &str,
     scope: &str,
 ) -> ContainerCommand {
-    let source_dir = format!("/work/.oav/generated/{scope}/{generator}");
+    let service = compile_service_name(generator, scope);
+    let compose_file = work_dir.join(".oav/docker-compose.yaml");
+    let project_dir = work_dir.join(".oav");
 
     let mut args = vec![
+        "compose".into(),
+        "-f".into(),
+        compose_file.display().to_string(),
+        "--project-directory".into(),
+        project_dir.display().to_string(),
         "run".into(),
         "--rm".into(),
-        "-v".into(),
-        format!("{}:/work", work_dir.display()),
     ];
     args.extend(docker::user_args());
-    args.extend([
-        cfg.generator_image.clone(),
-        "batch".into(),
-        "--includes".into(),
-        source_dir,
-    ]);
+    args.push(service);
 
     ContainerCommand {
         args,
         timeout: Duration::from_secs(cfg.docker_timeout),
         log_path: Some(work_dir.join(format!(".oav/reports/compile/{scope}/{generator}.log"))),
+    }
+}
+
+fn compile_service_name(generator: &str, scope: &str) -> String {
+    match scope {
+        "server" => format!("build-{generator}"),
+        _ => format!("build-client-{generator}"),
     }
 }
 
@@ -310,15 +322,49 @@ mod tests {
     }
 
     #[test]
-    fn compile_command_builds_correct_args() {
+    fn compile_command_uses_docker_compose() {
         let cfg = test_config();
         let cmd = compile_command(&cfg, Path::new("/tmp"), "spring", "server");
-        assert!(cmd.args.contains(&"batch".into()));
-        assert!(
-            cmd.args
-                .contains(&"/work/.oav/generated/server/spring".into())
+        assert_eq!(cmd.args[0], "compose");
+        assert!(cmd.args.contains(&"-f".into()));
+        assert!(cmd.args.contains(&"run".into()));
+        assert!(cmd.args.contains(&"--rm".into()));
+        assert!(cmd.args.contains(&"build-spring".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compile_command_passes_user_args() {
+        let cfg = test_config();
+        let cmd = compile_command(&cfg, Path::new("/tmp"), "spring", "server");
+        assert!(cmd.args.contains(&"--user".into()));
+        // Service name must come after --user so compose interprets it correctly
+        assert_eq!(cmd.args.last().unwrap(), "build-spring");
+    }
+
+    #[test]
+    fn compile_command_client_service_naming() {
+        let cfg = test_config();
+        let cmd = compile_command(&cfg, Path::new("/tmp"), "typescript-axios", "client");
+        assert!(cmd.args.contains(&"build-client-typescript-axios".into()));
+    }
+
+    #[test]
+    fn compile_service_name_server() {
+        assert_eq!(compile_service_name("spring", "server"), "build-spring");
+        assert_eq!(
+            compile_service_name("go-server", "server"),
+            "build-go-server"
         );
-        assert!(cmd.args.contains(&cfg.generator_image));
+    }
+
+    #[test]
+    fn compile_service_name_client() {
+        assert_eq!(
+            compile_service_name("typescript-axios", "client"),
+            "build-client-typescript-axios"
+        );
+        assert_eq!(compile_service_name("java", "client"), "build-client-java");
     }
 
     #[test]

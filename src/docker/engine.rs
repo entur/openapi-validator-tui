@@ -2,7 +2,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-/// Verify that the Docker daemon is reachable.
+/// Verify that the Docker daemon and Compose plugin are reachable.
 pub fn ensure_available() -> Result<()> {
     let status = Command::new("docker")
         .args(["version", "--format", "{{.Server.Version}}"])
@@ -14,6 +14,21 @@ pub fn ensure_available() -> Result<()> {
     if !status.success() {
         bail!("docker daemon is not running (exit {})", status);
     }
+
+    let compose = Command::new("docker")
+        .args(["compose", "version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("failed to check Docker Compose — is the Compose plugin installed?")?;
+
+    if !compose.success() {
+        bail!(
+            "Docker Compose plugin is not available. \
+             Install it via `docker plugin install compose` or your package manager."
+        );
+    }
+
     Ok(())
 }
 
