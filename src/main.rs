@@ -22,6 +22,7 @@ use ratatui::backend::CrosstermBackend;
 use app::diff::{DiffPanel, DiffViewState};
 use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
+use lazyoav::custom;
 use lazyoav::docker::{self, CancelToken};
 use lazyoav::keys::{KeyAction, KeyInput};
 use lazyoav::pipeline::{self, PipelineEvent, PipelineInput};
@@ -142,8 +143,18 @@ fn load_from_cwd(app: &mut App) {
         eprintln!("warning: failed to manage .gitignore: {e}");
     }
 
+    // Load custom generators if configured.
+    if let Some(dir) = &cfg.custom_generators_dir {
+        match custom::load(&cwd, dir) {
+            Ok(defs) => app.custom_defs = defs,
+            Err(e) => {
+                app.set_status(format!("Custom generators error: {e}"), StatusLevel::Warn);
+            }
+        }
+    }
+
     // Validate config against generator registry.
-    let warnings = config::validate(&cfg);
+    let warnings = config::validate(&cfg, &app.custom_defs);
     if !warnings.is_empty() {
         app.set_status(warnings.join("; "), StatusLevel::Warn);
     }
@@ -603,7 +614,7 @@ fn start_pipeline(app: &mut App) {
 
     app.snapshots.clear();
     app.browser.diff_state = DiffViewState::new();
-    let gen_pairs = pipeline::commands::build_generator_list(&cfg);
+    let gen_pairs = pipeline::commands::build_generator_list(&cfg, &app.custom_defs);
     for (generator, scope) in &gen_pairs {
         let key = format!("{scope}/{generator}");
         let gen_dir = cwd.join(".oav/generated").join(&key);
@@ -615,6 +626,7 @@ fn start_pipeline(app: &mut App) {
 
     let input = PipelineInput {
         config: cfg,
+        custom_defs: app.custom_defs.clone(),
         spec_path,
         work_dir: cwd,
     };

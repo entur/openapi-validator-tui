@@ -8,6 +8,7 @@ use crate::highlight::HighlightEngine;
 use crate::log_parser::LintError;
 use crate::spec::SpecIndex;
 use lazyoav::config::Config;
+use lazyoav::custom::CustomGeneratorDef;
 use lazyoav::docker::CancelToken;
 use lazyoav::keys::Keymap;
 use lazyoav::pipeline::{PipelineEvent, ValidateReport};
@@ -239,6 +240,8 @@ pub struct App {
 
     /// Loaded config, reused across validation runs.
     pub config: Option<Config>,
+    /// Custom generator definitions loaded from `custom_generators_dir`.
+    pub custom_defs: Vec<CustomGeneratorDef>,
 
     /// Transient status message for the bottom bar.
     pub status_message: Option<StatusMessage>,
@@ -280,6 +283,7 @@ impl App {
             live_log: String::new(),
             spec_path: None,
             config: None,
+            custom_defs: Vec::new(),
             status_message: None,
             fix_proposal: None,
             show_help: false,

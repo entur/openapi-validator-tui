@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::custom::CustomGeneratorDef;
 
 /// Mirrors the CLI's ValidateReport JSON structure.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,6 +46,7 @@ pub struct Summary {
 /// Input to the validation pipeline.
 pub struct PipelineInput {
     pub config: Config,
+    pub custom_defs: Vec<CustomGeneratorDef>,
     pub spec_path: PathBuf,
     pub work_dir: PathBuf,
 }
