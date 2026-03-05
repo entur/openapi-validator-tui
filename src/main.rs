@@ -177,8 +177,8 @@ fn load_from_cwd(app: &mut App) {
     if !cfg.keys.is_empty() {
         let (keymap, key_warnings) = lazyoav::keys::Keymap::from_config(&cfg.keys);
         app.keymap = keymap;
-        for w in key_warnings {
-            app.set_status(w, StatusLevel::Warn);
+        if !key_warnings.is_empty() {
+            app.set_status(key_warnings.join("; "), StatusLevel::Warn);
         }
     }
 

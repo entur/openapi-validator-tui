@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use serde::de::{self, Visitor};
+use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,8 +125,90 @@ pub struct Config {
     pub search_depth: usize,
     pub jobs: Jobs,
     pub manage_gitignore: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_keys")]
     pub keys: HashMap<String, Vec<String>>,
+}
+
+/// Accept both scalar strings and lists per action in the `keys` config map.
+///
+/// This allows users to write either form in `.oavc`:
+/// ```yaml
+/// keys:
+///   scroll_down: "j"          # single string
+///   quit: ["q", "C-c"]        # list of strings
+///   toggle_diff: []            # explicit unbind
+/// ```
+fn deserialize_keys<'de, D>(deserializer: D) -> Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct KeysVisitor;
+
+    impl<'de> Visitor<'de> for KeysVisitor {
+        type Value = HashMap<String, Vec<String>>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a map of action names to key strings or lists of key strings")
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: de::MapAccess<'de>,
+        {
+            let mut result = HashMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let value: StringOrVec = map.next_value()?;
+                result.insert(key, value.into_vec());
+            }
+            Ok(result)
+        }
+    }
+
+    deserializer.deserialize_map(KeysVisitor)
+}
+
+/// Helper for deserializing either a single string or a list of strings.
+#[derive(Debug)]
+enum StringOrVec {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl StringOrVec {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            StringOrVec::Single(s) => vec![s],
+            StringOrVec::Multiple(v) => v,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StringOrVec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StringOrVecVisitor;
+
+        impl<'de> Visitor<'de> for StringOrVecVisitor {
+            type Value = StringOrVec;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a string or a list of strings")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<StringOrVec, E> {
+                Ok(StringOrVec::Single(value.to_owned()))
+            }
+
+            fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<StringOrVec, S::Error> {
+                let mut v = Vec::new();
+                while let Some(s) = seq.next_element::<String>()? {
+                    v.push(s);
+                }
+                Ok(StringOrVec::Multiple(v))
+            }
+        }
+
+        deserializer.deserialize_any(StringOrVecVisitor)
+    }
 }
 
 impl Default for Config {

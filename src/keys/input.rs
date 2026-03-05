@@ -47,7 +47,7 @@ impl KeyInput {
     pub fn parse(s: &str) -> Result<Self, String> {
         // Ctrl modifier
         if let Some(rest) = s.strip_prefix("C-") {
-            if rest.len() == 1 {
+            if rest.chars().count() == 1 {
                 let c = rest.chars().next().unwrap().to_ascii_lowercase();
                 return Ok(Self {
                     code: KeyCode::Char(c),
@@ -68,7 +68,7 @@ impl KeyInput {
         }
 
         // Named keys (case-insensitive match on common names)
-        if s.len() > 1 {
+        if s.chars().count() > 1 {
             let code = parse_named_key(s).ok_or_else(|| format!("unknown key: {s}"))?;
             return Ok(Self {
                 code,
@@ -261,6 +261,17 @@ mod tests {
         let from_ev = KeyInput::from_event(ev);
         let from_cfg = KeyInput::parse("C-c").unwrap();
         assert_eq!(from_ev, from_cfg);
+    }
+
+    #[test]
+    fn parse_non_ascii_single_char() {
+        let ki = KeyInput::parse("ø").unwrap();
+        assert_eq!(ki.code, KeyCode::Char('ø'));
+        assert_eq!(ki.modifiers, KeyModifiers::NONE);
+
+        let ki = KeyInput::parse("ä").unwrap();
+        assert_eq!(ki.code, KeyCode::Char('ä'));
+        assert_eq!(ki.modifiers, KeyModifiers::NONE);
     }
 
     #[test]

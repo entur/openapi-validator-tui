@@ -45,9 +45,7 @@ impl Keymap {
             // (explicit unbinding). Only keep defaults if every key failed to parse
             // and the user provided at least one (i.e. all were invalid).
             let all_invalid = keys.is_empty() && !key_strs.is_empty();
-            if !all_invalid
-                && let Some(entry) = bindings.iter_mut().find(|(a, _)| *a == action)
-            {
+            if !all_invalid && let Some(entry) = bindings.iter_mut().find(|(a, _)| *a == action) {
                 *entry = (action, keys);
             }
         }
