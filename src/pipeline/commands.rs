@@ -123,7 +123,7 @@ pub fn compile_command(
     let compose_file = work_dir.join(".oav/docker-compose.yaml");
     let project_dir = work_dir.join(".oav");
 
-    let args = vec![
+    let mut args = vec![
         "compose".into(),
         "-f".into(),
         compose_file.display().to_string(),
@@ -131,8 +131,9 @@ pub fn compile_command(
         project_dir.display().to_string(),
         "run".into(),
         "--rm".into(),
-        service,
     ];
+    args.extend(docker::user_args());
+    args.push(service);
 
     ContainerCommand {
         args,
@@ -329,6 +330,16 @@ mod tests {
         assert!(cmd.args.contains(&"run".into()));
         assert!(cmd.args.contains(&"--rm".into()));
         assert!(cmd.args.contains(&"build-spring".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compile_command_passes_user_args() {
+        let cfg = test_config();
+        let cmd = compile_command(&cfg, Path::new("/tmp"), "spring", "server");
+        assert!(cmd.args.contains(&"--user".into()));
+        // Service name must come after --user so compose interprets it correctly
+        assert_eq!(cmd.args.last().unwrap(), "build-spring");
     }
 
     #[test]
