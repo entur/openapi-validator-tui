@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::types::Config;
+use crate::custom::CustomGeneratorDef;
 use crate::generators;
 
 const CONFIG_FILE: &str = ".oavc";
@@ -25,39 +26,44 @@ pub fn load(root: &Path) -> Result<Config> {
     Ok(config)
 }
 
-/// Validate config against the built-in generator registry.
+/// Validate config against the built-in and custom generator registries.
 ///
 /// Returns warning messages for unknown generators. These are warnings, not
 /// errors — unknown generators still run via bare `-g`.
-pub fn validate(cfg: &Config) -> Vec<String> {
+pub fn validate(cfg: &Config, custom_defs: &[CustomGeneratorDef]) -> Vec<String> {
     let mut warnings = Vec::new();
 
+    let is_known = |name: &str, scope: &str| -> bool {
+        generators::find_builtin(name, scope).is_some()
+            || custom_defs
+                .iter()
+                .any(|d| d.name == name && d.scope == scope)
+    };
+
     for name in &cfg.server_generators {
-        if generators::find_builtin(name, "server").is_none() {
+        if !is_known(name, "server") {
             warnings.push(format!(
-                "Unknown server generator '{name}' — no built-in config available"
+                "Unknown server generator '{name}' — no built-in or custom config available"
             ));
         }
     }
 
     for name in &cfg.client_generators {
-        if generators::find_builtin(name, "client").is_none() {
+        if !is_known(name, "client") {
             warnings.push(format!(
-                "Unknown client generator '{name}' — no built-in config available"
+                "Unknown client generator '{name}' — no built-in or custom config available"
             ));
         }
     }
 
     for key in cfg.generator_config_overrides.keys() {
-        // When a generator list is empty it defaults to all builtins, so an
-        // override for a known builtin in that scope is valid.
         let in_server = if cfg.server_generators.is_empty() {
-            generators::find_builtin(key, "server").is_some()
+            is_known(key, "server")
         } else {
             cfg.server_generators.iter().any(|g| g == key)
         };
         let in_client = if cfg.client_generators.is_empty() {
-            generators::find_builtin(key, "client").is_some()
+            is_known(key, "client")
         } else {
             cfg.client_generators.iter().any(|g| g == key)
         };

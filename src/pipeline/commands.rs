@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::custom::CustomGeneratorDef;
 use crate::docker::{self, ContainerCommand};
 use crate::generators;
 
@@ -149,6 +150,75 @@ fn compile_service_name(generator: &str, scope: &str) -> String {
     }
 }
 
+/// Build a `docker run` command for a custom generator's generate step.
+///
+/// Interpolates `{spec}` in the command with the container spec path.
+pub fn custom_generate_command(
+    cfg: &Config,
+    spec_path: &Path,
+    work_dir: &Path,
+    def: &CustomGeneratorDef,
+) -> ContainerCommand {
+    let spec_name = spec_path.file_name().unwrap_or_default().to_string_lossy();
+    let container_spec = format!("/work/{spec_name}");
+    let resolved_command = def.generate.command.replace("{spec}", &container_spec);
+
+    let cmd_args: Vec<String> =
+        shell_words::split(&resolved_command).unwrap_or_else(|_| vec![resolved_command.clone()]);
+
+    let mut args = vec![
+        "run".into(),
+        "--rm".into(),
+        "-v".into(),
+        format!("{}:/work", work_dir.display()),
+    ];
+    args.extend(docker::user_args());
+    args.push(def.generate.image.clone());
+    args.extend(cmd_args);
+
+    ContainerCommand {
+        args,
+        timeout: Duration::from_secs(cfg.docker_timeout),
+        log_path: Some(work_dir.join(format!(
+            ".oav/reports/generate/{}/{}.log",
+            def.scope, def.name
+        ))),
+    }
+}
+
+/// Build a `docker run` command for a custom generator's compile step.
+///
+/// Runs in the generated output directory as the working directory.
+pub fn custom_compile_command(
+    cfg: &Config,
+    work_dir: &Path,
+    def: &CustomGeneratorDef,
+    compile: &crate::custom::CompileBlock,
+) -> ContainerCommand {
+    let workdir = format!("/work/.oav/generated/{}/{}", def.scope, def.name);
+    let cmd_args: Vec<String> =
+        shell_words::split(&compile.command).unwrap_or_else(|_| vec![compile.command.clone()]);
+
+    let mut args = vec![
+        "run".into(),
+        "--rm".into(),
+        "-v".into(),
+        format!("{}:/work", work_dir.display()),
+    ];
+    args.extend(docker::user_args());
+    args.extend(["-w".into(), workdir, compile.image.clone()]);
+    args.extend(cmd_args);
+
+    ContainerCommand {
+        args,
+        timeout: Duration::from_secs(cfg.docker_timeout),
+        log_path: Some(work_dir.join(format!(
+            ".oav/reports/compile/{}/{}.log",
+            def.scope, def.name
+        ))),
+    }
+}
+
 /// Resolve the config file path for a generator.
 ///
 /// Resolution order:
@@ -168,14 +238,23 @@ pub fn resolve_config_path(cfg: &Config, generator: &str, scope: &str) -> Option
 /// Resolve the full list of `(generator, scope)` pairs from config.
 ///
 /// When generator lists are empty and the mode includes that scope,
-/// defaults to all builtin generators for that scope.
-pub fn build_generator_list(cfg: &Config) -> Vec<(String, String)> {
+/// defaults to all builtin generators + all custom generators for that scope.
+pub fn build_generator_list(
+    cfg: &Config,
+    custom_defs: &[CustomGeneratorDef],
+) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
 
-    let add_for_scope = |pairs: &mut Vec<(String, String)>, generators: &[String], scope: &str| {
+    let add_for_scope = |pairs: &mut Vec<(String, String)>,
+                         generators: &[String],
+                         scope: &str,
+                         custom: &[CustomGeneratorDef]| {
         if generators.is_empty() {
             for def in generators::builtin_generators_for_scope(scope) {
                 pairs.push((def.name.to_string(), scope.to_string()));
+            }
+            for def in custom.iter().filter(|d| d.scope == scope) {
+                pairs.push((def.name.clone(), scope.to_string()));
             }
         } else {
             for generator in generators {
@@ -186,14 +265,14 @@ pub fn build_generator_list(cfg: &Config) -> Vec<(String, String)> {
 
     match cfg.mode {
         crate::config::Mode::Server => {
-            add_for_scope(&mut pairs, &cfg.server_generators, "server");
+            add_for_scope(&mut pairs, &cfg.server_generators, "server", custom_defs);
         }
         crate::config::Mode::Client => {
-            add_for_scope(&mut pairs, &cfg.client_generators, "client");
+            add_for_scope(&mut pairs, &cfg.client_generators, "client", custom_defs);
         }
         crate::config::Mode::Both => {
-            add_for_scope(&mut pairs, &cfg.server_generators, "server");
-            add_for_scope(&mut pairs, &cfg.client_generators, "client");
+            add_for_scope(&mut pairs, &cfg.server_generators, "server", custom_defs);
+            add_for_scope(&mut pairs, &cfg.client_generators, "client", custom_defs);
         }
     }
 
@@ -370,7 +449,7 @@ mod tests {
     #[test]
     fn build_generator_list_both_mode() {
         let cfg = test_config();
-        let pairs = build_generator_list(&cfg);
+        let pairs = build_generator_list(&cfg, &[]);
         assert_eq!(pairs.len(), 2);
         assert_eq!(pairs[0], ("spring".into(), "server".into()));
         assert_eq!(pairs[1], ("typescript-axios".into(), "client".into()));
@@ -380,7 +459,7 @@ mod tests {
     fn build_generator_list_server_only() {
         let mut cfg = test_config();
         cfg.mode = Mode::Server;
-        let pairs = build_generator_list(&cfg);
+        let pairs = build_generator_list(&cfg, &[]);
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].1, "server");
     }
@@ -390,7 +469,7 @@ mod tests {
         let mut cfg = test_config();
         cfg.server_generators.clear();
         cfg.client_generators.clear();
-        let pairs = build_generator_list(&cfg);
+        let pairs = build_generator_list(&cfg, &[]);
         assert_eq!(pairs.len(), 14); // 6 server + 8 client
     }
 
@@ -399,7 +478,7 @@ mod tests {
         let mut cfg = test_config();
         cfg.mode = Mode::Server;
         cfg.server_generators.clear();
-        let pairs = build_generator_list(&cfg);
+        let pairs = build_generator_list(&cfg, &[]);
         assert_eq!(pairs.len(), 6);
         assert!(pairs.iter().all(|(_, s)| s == "server"));
     }
@@ -462,5 +541,65 @@ mod tests {
         cfg.docker_timeout = 60;
         let cmd = spectral_command(&cfg, Path::new("/tmp/spec.yaml"), Path::new("/tmp"));
         assert_eq!(cmd.timeout, Duration::from_secs(60));
+    }
+
+    fn custom_def(name: &str, scope: &str) -> CustomGeneratorDef {
+        CustomGeneratorDef {
+            name: name.into(),
+            scope: scope.into(),
+            generate: crate::custom::GenerateBlock {
+                image: "my-image:latest".into(),
+                command: "gen --spec {spec} --output /work/.oav/generated/server/my-gen".into(),
+            },
+            compile: Some(crate::custom::CompileBlock {
+                image: "build-image:latest".into(),
+                command: "npm run build".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn build_generator_list_includes_custom_when_empty() {
+        let mut cfg = test_config();
+        cfg.mode = Mode::Server;
+        cfg.server_generators.clear();
+        let custom = vec![custom_def("my-gen", "server")];
+        let pairs = build_generator_list(&cfg, &custom);
+        assert_eq!(pairs.len(), 7); // 6 builtins + 1 custom
+        assert!(pairs.iter().any(|(n, _)| n == "my-gen"));
+    }
+
+    #[test]
+    fn build_generator_list_explicit_custom_name() {
+        let mut cfg = test_config();
+        cfg.mode = Mode::Server;
+        cfg.server_generators = vec!["my-gen".into()];
+        let custom = vec![custom_def("my-gen", "server")];
+        let pairs = build_generator_list(&cfg, &custom);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "my-gen");
+    }
+
+    #[test]
+    fn custom_generate_command_interpolates_spec() {
+        let cfg = test_config();
+        let def = custom_def("my-gen", "server");
+        let cmd =
+            custom_generate_command(&cfg, Path::new("/tmp/spec.yaml"), Path::new("/tmp"), &def);
+        assert!(cmd.args.contains(&"my-image:latest".into()));
+        // {spec} should be replaced with /work/spec.yaml
+        assert!(cmd.args.iter().any(|a| a.contains("/work/spec.yaml")));
+        assert!(!cmd.args.iter().any(|a| a.contains("{spec}")));
+    }
+
+    #[test]
+    fn custom_compile_command_sets_workdir() {
+        let cfg = test_config();
+        let def = custom_def("my-gen", "server");
+        let compile = def.compile.as_ref().unwrap();
+        let cmd = custom_compile_command(&cfg, Path::new("/tmp"), &def, compile);
+        assert!(cmd.args.contains(&"build-image:latest".into()));
+        let w_pos = cmd.args.iter().position(|a| a == "-w").expect("-w missing");
+        assert_eq!(cmd.args[w_pos + 1], "/work/.oav/generated/server/my-gen");
     }
 }

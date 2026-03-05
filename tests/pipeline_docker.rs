@@ -42,6 +42,7 @@ fn spectral_lint_petstore() {
 
     let input = PipelineInput {
         config: cfg,
+        custom_defs: Vec::new(),
         spec_path,
         work_dir: dir.path().to_path_buf(),
     };
@@ -85,6 +86,7 @@ fn generate_single_generator() {
 
     let input = PipelineInput {
         config: cfg,
+        custom_defs: Vec::new(),
         spec_path,
         work_dir: dir.path().to_path_buf(),
     };
@@ -126,6 +128,7 @@ fn full_pipeline_lint_generate_compile() {
 
     let input = PipelineInput {
         config: cfg,
+        custom_defs: Vec::new(),
         spec_path,
         work_dir: dir.path().to_path_buf(),
     };
@@ -179,6 +182,7 @@ fn cancel_mid_pipeline() {
 
     let input = PipelineInput {
         config: cfg,
+        custom_defs: Vec::new(),
         spec_path,
         work_dir: dir.path().to_path_buf(),
     };

@@ -3,9 +3,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use crate::config::Linter;
 use crate::docker::{self, CancelToken, OutputLine};
 
+use crate::custom::CustomGeneratorDef;
+
 use super::commands::{
-    build_generator_list, compile_command, generator_command, redocly_command, resolve_config_path,
-    spectral_command, write_builtin_configs,
+    build_generator_list, compile_command, custom_compile_command, custom_generate_command,
+    generator_command, redocly_command, resolve_config_path, spectral_command,
+    write_builtin_configs,
 };
 use super::types::{
     LintResult, Phase, Phases, PipelineEvent, PipelineInput, StepResult, Summary, ValidateReport,
@@ -74,7 +77,7 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
     }
 
     // ── Generate ─────────────────────────────────────────────────────
-    let generators = build_generator_list(cfg);
+    let generators = build_generator_list(cfg, &input.custom_defs);
 
     if cfg.generate && !generators.is_empty() {
         if let Err(e) = write_builtin_configs(cfg, &input.work_dir, &generators) {
@@ -83,8 +86,15 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
             )));
             return;
         }
-        let gen_results =
-            run_steps_parallel(&generators, cfg, &input, &cancel, &tx, StepKind::Generate);
+        let gen_results = run_steps_parallel(
+            &generators,
+            cfg,
+            &input,
+            &input.custom_defs,
+            &cancel,
+            &tx,
+            StepKind::Generate,
+        );
 
         if cancel.is_cancelled() {
             let _ = tx.send(PipelineEvent::Aborted("Cancelled by user".into()));
@@ -104,8 +114,15 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
 
         // ── Compile (only if all generators passed) ──────────────────
         if cfg.compile && all_passed {
-            let compile_results =
-                run_steps_parallel(&generators, cfg, &input, &cancel, &tx, StepKind::Compile);
+            let compile_results = run_steps_parallel(
+                &generators,
+                cfg,
+                &input,
+                &input.custom_defs,
+                &cancel,
+                &tx,
+                StepKind::Compile,
+            );
 
             if cancel.is_cancelled() {
                 let _ = tx.send(PipelineEvent::Aborted("Cancelled by user".into()));
@@ -160,6 +177,7 @@ fn run_steps_parallel(
     generators: &[(String, String)],
     cfg: &crate::config::Config,
     input: &PipelineInput,
+    custom_defs: &[CustomGeneratorDef],
     cancel: &CancelToken,
     tx: &Sender<PipelineEvent>,
     kind: StepKind,
@@ -186,19 +204,53 @@ fn run_steps_parallel(
                     },
                 };
 
+                let custom_def = find_custom_def(custom_defs, gen_name, scope);
+
                 let cmd = match kind {
                     StepKind::Generate => {
-                        let config_path = resolve_config_path(cfg, gen_name, scope);
-                        generator_command(
-                            cfg,
-                            &input.spec_path,
-                            &input.work_dir,
-                            gen_name,
-                            scope,
-                            config_path.as_deref(),
-                        )
+                        if let Some(def) = &custom_def {
+                            custom_generate_command(cfg, &input.spec_path, &input.work_dir, def)
+                        } else {
+                            let config_path = resolve_config_path(cfg, gen_name, scope);
+                            generator_command(
+                                cfg,
+                                &input.spec_path,
+                                &input.work_dir,
+                                gen_name,
+                                scope,
+                                config_path.as_deref(),
+                            )
+                        }
                     }
-                    StepKind::Compile => compile_command(cfg, &input.work_dir, gen_name, scope),
+                    StepKind::Compile => {
+                        if let Some(def) = &custom_def {
+                            if let Some(compile) = &def.compile {
+                                custom_compile_command(cfg, &input.work_dir, def, compile)
+                            } else {
+                                // No compile block — skip by returning a no-op.
+                                let tx = tx.clone();
+                                let phase_clone = phase.clone();
+                                let gen_name = gen_name.clone();
+                                let scope = scope.clone();
+                                return std::thread::spawn(move || {
+                                    let _ =
+                                        tx.send(PipelineEvent::PhaseStarted(phase_clone.clone()));
+                                    let _ = tx.send(PipelineEvent::PhaseFinished {
+                                        phase: phase_clone,
+                                        success: true,
+                                    });
+                                    StepResult {
+                                        generator: gen_name,
+                                        scope,
+                                        status: "pass".to_string(),
+                                        log: String::new(),
+                                    }
+                                });
+                            }
+                        } else {
+                            compile_command(cfg, &input.work_dir, gen_name, scope)
+                        }
+                    }
                 };
 
                 let cancel = cancel.clone();
@@ -233,6 +285,16 @@ fn run_steps_parallel(
     }
 
     results
+}
+
+fn find_custom_def(
+    defs: &[CustomGeneratorDef],
+    name: &str,
+    scope: &str,
+) -> Option<CustomGeneratorDef> {
+    defs.iter()
+        .find(|d| d.name == name && d.scope == scope)
+        .cloned()
 }
 
 struct ContainerOutcome {
@@ -293,7 +355,7 @@ mod tests {
             client_generators: vec!["typescript-axios".into()],
             ..Config::default()
         };
-        let pairs = build_generator_list(&cfg);
+        let pairs = build_generator_list(&cfg, &[]);
         assert_eq!(pairs.len(), 3);
     }
 
@@ -380,6 +442,7 @@ mod tests {
     fn test_input(cfg: Config) -> PipelineInput {
         PipelineInput {
             config: cfg,
+            custom_defs: Vec::new(),
             spec_path: std::path::PathBuf::from("/tmp/spec.yaml"),
             work_dir: std::path::PathBuf::from("/tmp"),
         }
