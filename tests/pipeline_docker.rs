@@ -325,7 +325,10 @@ fn generated_code_exists_on_host() {
             let steps = report.phases.generate.as_ref().unwrap();
             if steps[0].status == "pass" {
                 let gen_dir = dir.path().join(".oav/generated/server/spring");
-                assert!(gen_dir.exists(), "generated output dir should exist on host");
+                assert!(
+                    gen_dir.exists(),
+                    "generated output dir should exist on host"
+                );
                 // Should contain at least one file (e.g. pom.xml, build.gradle, etc.)
                 let file_count = std::fs::read_dir(&gen_dir)
                     .expect("should read generated dir")
@@ -405,14 +408,12 @@ fn log_files_written_for_phases() {
     let lint_log = dir.path().join(".oav/reports/lint/spectral.log");
     assert!(lint_log.exists(), "spectral lint log should be written");
     assert!(
-        std::fs::read_to_string(&lint_log).unwrap().len() > 0,
+        !std::fs::read_to_string(&lint_log).unwrap().is_empty(),
         "lint log should not be empty"
     );
 
     // Generate log.
-    let gen_log = dir
-        .path()
-        .join(".oav/reports/generate/server/spring.log");
+    let gen_log = dir.path().join(".oav/reports/generate/server/spring.log");
     assert!(gen_log.exists(), "generate log should be written");
 }
 
@@ -536,9 +537,12 @@ fn pipeline_events_ordering() {
     );
 
     // Lint PhaseStarted should come before any Generate PhaseStarted.
-    let lint_start_idx = events
-        .iter()
-        .position(|e| matches!(e, PipelineEvent::PhaseStarted(lazyoav::pipeline::Phase::Lint)));
+    let lint_start_idx = events.iter().position(|e| {
+        matches!(
+            e,
+            PipelineEvent::PhaseStarted(lazyoav::pipeline::Phase::Lint)
+        )
+    });
     let gen_start_idx = events.iter().position(|e| {
         matches!(
             e,
