@@ -1,12 +1,12 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 
 use crate::app::App;
 use crate::ui::style::{
-    COLOR_FAIL, COLOR_SELECTED_BG, make_block, phase_status_color, phase_status_icon,
+    COLOR_FAIL, STYLE_SELECTED, make_block, phase_status_color, phase_status_icon,
 };
 
 pub fn draw_phases(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
@@ -44,7 +44,7 @@ pub fn draw_phases(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
             let mut style = Style::default();
             if focused && i == app.phase_index {
-                style = style.bg(COLOR_SELECTED_BG);
+                style = style.patch(STYLE_SELECTED);
             }
 
             ListItem::new(Line::from(spans)).style(style)
@@ -56,11 +56,9 @@ pub fn draw_phases(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
         state.select(Some(app.phase_index));
     }
 
-    let list = List::new(items).block(block).highlight_style(
-        Style::default()
-            .bg(COLOR_SELECTED_BG)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(STYLE_SELECTED);
 
     frame.render_stateful_widget(list, area, &mut state);
 }

@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 
 use crate::app::App;
-use crate::ui::style::{COLOR_SELECTED_BG, ICON_SEVERITY, make_block, severity_color};
+use crate::ui::style::{ICON_SEVERITY, STYLE_SELECTED, make_block, severity_color};
 
 /// Truncate a string to at most `max` characters, appending "..." if shortened.
 fn truncate_chars(s: &str, max: usize) -> String {
@@ -60,7 +60,7 @@ pub fn draw_errors(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
                 let mut style = Style::default();
                 if focused && i == app.error_index {
-                    style = style.bg(COLOR_SELECTED_BG);
+                    style = style.patch(STYLE_SELECTED);
                 }
                 ListItem::new(Line::from(spans)).style(style)
             })
@@ -85,7 +85,7 @@ pub fn draw_errors(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
 
                 let mut style = Style::default();
                 if focused && i == app.error_index {
-                    style = style.bg(COLOR_SELECTED_BG);
+                    style = style.patch(STYLE_SELECTED);
                 }
                 ListItem::new(Line::from(spans)).style(style)
             })
@@ -97,11 +97,9 @@ pub fn draw_errors(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
         state.select(Some(app.error_index));
     }
 
-    let list = List::new(items).block(block).highlight_style(
-        Style::default()
-            .bg(COLOR_SELECTED_BG)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(STYLE_SELECTED);
 
     frame.render_stateful_widget(list, area, &mut state);
 }

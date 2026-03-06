@@ -6,7 +6,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Tabs, Wrap};
 
 use crate::app::browser::syntax_name_for_path;
 use crate::app::{App, BrowserPanel};
-use crate::ui::style::{COLOR_GUTTER, COLOR_SELECTED_BG, make_block};
+use crate::ui::style::{COLOR_GUTTER, STYLE_SELECTED, make_block};
 
 pub fn draw_code_browser(frame: &mut Frame, app: &App, area: Rect) {
     let horizontal = Layout::default()
@@ -94,11 +94,7 @@ fn draw_file_tree(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).highlight_style(
-        Style::default()
-            .bg(COLOR_SELECTED_BG)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items).highlight_style(STYLE_SELECTED);
 
     let mut list_state = ListState::default();
     list_state.select(Some(app.browser.file_index));

@@ -124,7 +124,12 @@ pub fn compile_command(
     let compose_file = work_dir.join(".oav/docker-compose.yaml");
     let project_dir = work_dir.join(".oav");
 
-    let mut args = vec![
+    // Compile containers run as their image's default user (typically root)
+    // because build toolchains need full system access: package managers,
+    // native libraries, and writable cache directories.  The --user flag
+    // is intentionally omitted here — only generate commands need it so
+    // that output files are owned by the host user.
+    let args = vec![
         "compose".into(),
         "-f".into(),
         compose_file.display().to_string(),
@@ -132,9 +137,8 @@ pub fn compile_command(
         project_dir.display().to_string(),
         "run".into(),
         "--rm".into(),
+        service,
     ];
-    args.extend(docker::user_args());
-    args.push(service);
 
     ContainerCommand {
         args,
@@ -199,14 +203,16 @@ pub fn custom_compile_command(
     let cmd_args: Vec<String> =
         shell_words::split(&compile.command).unwrap_or_else(|_| vec![compile.command.clone()]);
 
+    // No --user for compile containers — same rationale as builtin compile_command.
     let mut args = vec![
         "run".into(),
         "--rm".into(),
         "-v".into(),
         format!("{}:/work", work_dir.display()),
+        "-w".into(),
+        workdir,
+        compile.image.clone(),
     ];
-    args.extend(docker::user_args());
-    args.extend(["-w".into(), workdir, compile.image.clone()]);
     args.extend(cmd_args);
 
     ContainerCommand {
@@ -411,13 +417,12 @@ mod tests {
         assert!(cmd.args.contains(&"build-spring".into()));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn compile_command_passes_user_args() {
+    fn compile_command_omits_user_args() {
         let cfg = test_config();
         let cmd = compile_command(&cfg, Path::new("/tmp"), "spring", "server");
-        assert!(cmd.args.contains(&"--user".into()));
-        // Service name must come after --user so compose interprets it correctly
+        // Compile containers run as their image's default user — no --user flag.
+        assert!(!cmd.args.contains(&"--user".into()));
         assert_eq!(cmd.args.last().unwrap(), "build-spring");
     }
 

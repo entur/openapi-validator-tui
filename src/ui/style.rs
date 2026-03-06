@@ -9,8 +9,20 @@ pub const COLOR_PASS: Color = Color::Green;
 pub const COLOR_FAIL: Color = Color::Red;
 pub const COLOR_RUNNING: Color = Color::Yellow;
 pub const COLOR_PENDING: Color = Color::DarkGray;
-pub const COLOR_SELECTED_BG: Color = Color::DarkGray;
 pub const COLOR_GUTTER: Color = Color::DarkGray;
+
+// ── Selection / highlight styles ──────────────────────────────────────
+// REVERSED adapts to any terminal palette (dark or light) by swapping
+// the foreground and background colours at render time.
+pub const STYLE_SELECTED: Style = Style::new()
+    .add_modifier(Modifier::REVERSED)
+    .add_modifier(Modifier::BOLD);
+
+// For highlighted lines in source viewers (spec context, code browser)
+// underline preserves syntax-highlight colours while marking the line.
+pub const STYLE_HIGHLIGHT_LINE: Style = Style::new()
+    .add_modifier(Modifier::UNDERLINED)
+    .add_modifier(Modifier::BOLD);
 
 // ── Icon constants ────────────────────────────────────────────────────
 pub const ICON_PASS: &str = "✓";

@@ -1,11 +1,11 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::app::App;
-use crate::ui::style::{COLOR_GUTTER, COLOR_SELECTED_BG, make_block};
+use crate::ui::style::{COLOR_GUTTER, STYLE_HIGHLIGHT_LINE, make_block};
 
 pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let block = make_block("Spec Context", focused);
@@ -94,7 +94,7 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
             if let Some(segments) = all_highlighted.get(start_idx + i) {
                 for (style, text) in segments {
                     let style = if is_target {
-                        style.bg(COLOR_SELECTED_BG).add_modifier(Modifier::BOLD)
+                        style.patch(STYLE_HIGHLIGHT_LINE)
                     } else {
                         *style
                     };
