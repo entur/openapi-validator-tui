@@ -468,7 +468,10 @@ impl App {
             self.phase_index = 0;
         }
 
-        let error_count = self.current_errors().len();
+        let error_count = self
+            .current_errors()
+            .len()
+            .max(self.current_compile_errors().len());
         if error_count > 0 {
             self.error_index = self.error_index.min(error_count - 1);
         } else {

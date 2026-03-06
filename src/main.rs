@@ -762,6 +762,7 @@ fn drain_pipeline_events(app: &mut App) {
             sync_generators_from_report(app);
             if let Ok(cwd) = std::env::current_dir() {
                 app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                rebuild_trace_index(app, &cwd);
             }
         }
     }
@@ -984,6 +985,7 @@ fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
                 (app.browser.generator_index + 1) % app.browser.generators.len();
             if let Ok(cwd) = std::env::current_dir() {
                 app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                rebuild_trace_index(app, &cwd);
             }
         }
     } else if has(KeyAction::PrevGenerator) {
@@ -992,6 +994,7 @@ fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
             app.browser.generator_index = (app.browser.generator_index + len - 1) % len;
             if let Ok(cwd) = std::env::current_dir() {
                 app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                rebuild_trace_index(app, &cwd);
             }
         }
     }
@@ -1084,15 +1087,26 @@ fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
                 && let Some(spec_names) = trace.file_to_spec.get(&rel)
                 && !spec_names.is_empty()
             {
-                // Find the first spec name that resolves in the spec index.
-                let target = spec_names.first().unwrap();
-                let pointer = format!("/components/schemas/{target}");
-                if let Some(ref si) = app.spec_index
-                    && let Some(span) = si.resolve(&pointer)
-                {
+                // Try to resolve each name as a spec pointer.
+                let resolved = spec_names.iter().find_map(|name| {
+                    let si = app.spec_index.as_ref()?;
+                    // Try as schema first, then as API path.
+                    let pointer = format!("/components/schemas/{name}");
+                    if let Some(span) = si.resolve(&pointer) {
+                        return Some((name.clone(), span));
+                    }
+                    // API path: name is like "/pets", pointer is /paths/~1pets
+                    let escaped = name.replace('~', "~0").replace('/', "~1");
+                    let pointer = format!("/paths/{escaped}");
+                    if let Some(span) = si.resolve(&pointer) {
+                        return Some((name.clone(), span));
+                    }
+                    None
+                });
+
+                if let Some((target, span)) = resolved {
                     app.view_mode = ViewMode::Validator;
                     app.focused_panel = Panel::SpecContext;
-                    // Set spec scroll near the target line.
                     app.spec_scroll = span.line.saturating_sub(3) as u16;
                     app.set_status(
                         format!("Jumped to spec origin: {target}"),

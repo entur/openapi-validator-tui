@@ -292,6 +292,9 @@ pub struct SpecNames {
     pub operation_ids: Vec<String>,
     /// Tag names.
     pub tags: Vec<String>,
+    /// API path segments (e.g. "/pets", "/orders/{orderId}").
+    /// Stored as decoded path segments (with `~1` → `/` unescaped).
+    pub api_paths: Vec<String>,
 }
 
 impl SpecNames {
@@ -310,14 +313,35 @@ impl SpecNames {
                 }
             }
 
-            // /paths/{path}/{method}/operationId (won't be in pointers directly,
-            // but /paths/{path}/{method} gives us operation groups)
-
-            // /paths/{path}/{method} — extract path-based operation groups.
-            // We can't resolve operationId values from pointers alone (they're leaf
-            // values, not keys), but the path segment gives us the operation group.
+            // /paths/{path}/{method} — extract the API path and derive resource names.
+            if parts.len() >= 3 && parts[1] == "paths" {
+                let raw_path = parts[2].replace("~1", "/").replace("~0", "~");
+                if !names.api_paths.contains(&raw_path) {
+                    names.api_paths.push(raw_path);
+                }
+            }
         }
 
+        names
+    }
+
+    /// Derive searchable resource names from API paths.
+    ///
+    /// `/pets` → `"pets"`, `/pets/{petId}` → `"pets"`,
+    /// `/users/{userId}/orders` → `"orders"`, `"users"`.
+    pub fn path_resource_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for path in &self.api_paths {
+            for segment in path.split('/') {
+                if segment.is_empty() || segment.starts_with('{') {
+                    continue;
+                }
+                let lower = segment.to_ascii_lowercase();
+                if !names.contains(&lower) {
+                    names.push(lower);
+                }
+            }
+        }
         names
     }
 }
@@ -373,6 +397,27 @@ fn name_based_match(file_stem: &str, rel_path: &Path, names: &SpecNames) -> Vec<
         // Direct or suffixed match in api directories.
         if is_api_dir && (stem_lower == op_lower || stem_lower.contains(&op_lower)) {
             matches.push(op_id.clone());
+        }
+    }
+
+    // Match API path resource names against files in api-like directories.
+    // e.g., /pets → PetsApi.java, pets_controller.py, PetsService.ts
+    let resource_names = names.path_resource_names();
+    for resource in &resource_names {
+        if stem_lower.contains(resource) && (is_api_dir || stem_lower.ends_with("api")) {
+            // Store the original API path for trace-back.
+            let api_path = names
+                .api_paths
+                .iter()
+                .find(|p| {
+                    p.split('/')
+                        .any(|seg| seg.to_ascii_lowercase() == *resource)
+                })
+                .cloned()
+                .unwrap_or_else(|| resource.clone());
+            if !matches.contains(&api_path) {
+                matches.push(api_path);
+            }
         }
     }
 
@@ -595,6 +640,31 @@ Some random noise
         ];
         let names = SpecNames::from_pointers(&pointers);
         assert_eq!(names.schemas, vec!["Pet", "Order"]);
+        assert_eq!(names.api_paths, vec!["/pets"]);
+    }
+
+    #[test]
+    fn path_resource_names_extracts_segments() {
+        let names = SpecNames {
+            api_paths: vec!["/pets".into(), "/users/{userId}/orders".into()],
+            ..Default::default()
+        };
+        let resources = names.path_resource_names();
+        assert!(resources.contains(&"pets".to_string()));
+        assert!(resources.contains(&"users".to_string()));
+        assert!(resources.contains(&"orders".to_string()));
+        // {userId} is a parameter, not a resource
+        assert!(!resources.iter().any(|r| r.contains('{')));
+    }
+
+    #[test]
+    fn name_match_api_path_resource() {
+        let names = SpecNames {
+            api_paths: vec!["/pets".into()],
+            ..Default::default()
+        };
+        let m = name_based_match("PetsApi", Path::new("api/PetsApi.java"), &names);
+        assert!(m.contains(&"/pets".to_string()));
     }
 
     // ── Name-based matching ──────────────────────────────────────────
