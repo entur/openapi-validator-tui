@@ -64,8 +64,17 @@ pub enum Phase {
 #[allow(dead_code)]
 pub enum PipelineEvent {
     PhaseStarted(Phase),
-    Log { phase: Phase, line: String },
-    PhaseFinished { phase: Phase, success: bool },
+    Log {
+        phase: Phase,
+        line: String,
+    },
+    PhaseFinished {
+        phase: Phase,
+        success: bool,
+    },
+    /// Sent immediately after lint finishes so the TUI can display
+    /// lint errors while generate/compile are still running.
+    LintCompleted(LintResult),
     Completed(ValidateReport),
     Aborted(String),
 }

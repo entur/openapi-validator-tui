@@ -21,7 +21,7 @@ use ratatui::backend::CrosstermBackend;
 
 use app::diff::{DiffPanel, DiffViewState};
 use app::trace;
-use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
+use app::{App, BrowserPanel, Panel, PhaseStatus, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::custom;
 use lazyoav::docker::{self, CancelToken};
@@ -76,12 +76,17 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
     while app.running {
         app.tick = app.tick.wrapping_add(1);
+
+        // Drain pipeline events BEFORE drawing so the frame always
+        // reflects the latest phase transitions and lint results.
+        drain_pipeline_events(&mut app);
+
         terminal.draw(|frame| ui::draw(frame, &app))?;
 
-        // Poll for input: use a short timeout while validating (to drain
-        // pipeline events promptly) and a longer one when idle to save CPU.
+        // Short poll during validation (~60 fps) so phase status updates
+        // render promptly.  Longer when idle to save CPU.
         let poll_timeout = if app.validating {
-            Duration::from_millis(50)
+            Duration::from_millis(16)
         } else {
             Duration::from_millis(200)
         };
@@ -96,8 +101,6 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             }
             app.clamp_indices();
         }
-
-        drain_pipeline_events(&mut app);
     }
 
     Ok(())
@@ -661,6 +664,8 @@ fn start_pipeline(app: &mut App) {
     app.lint_errors.clear();
     app.compile_errors.clear();
     app.live_log.clear();
+    app.live_phases.clear();
+    app.live_lint_result = None;
     app.phase_index = 0;
     app.error_index = 0;
     app.detail_scroll = 0;
@@ -671,19 +676,48 @@ fn start_pipeline(app: &mut App) {
 }
 
 /// Drain pending pipeline events without blocking.
+///
+/// Processes at most `DRAIN_BUDGET` events per call so that parallel Docker
+/// processes producing high-volume log output cannot starve the draw/input
+/// cycle.  Structural events (phase transitions, completion) are always
+/// processed — only `Log` lines count against the budget.
+const DRAIN_BUDGET: usize = 256;
+
 fn drain_pipeline_events(app: &mut App) {
     let done = if let Some(rx) = &app.pipeline_rx {
         let mut finished = false;
+        let mut log_count = 0usize;
         while let Ok(ev) = rx.try_recv() {
             match ev {
-                PipelineEvent::PhaseStarted(_) => {
+                PipelineEvent::PhaseStarted(ref phase) => {
+                    app.live_phases.push((phase.clone(), PhaseStatus::Running));
                     app.live_log.clear();
                 }
                 PipelineEvent::Log { line, .. } => {
                     app.live_log.push_str(&line);
                     app.live_log.push('\n');
+                    log_count += 1;
+                    if log_count >= DRAIN_BUDGET {
+                        break;
+                    }
                 }
-                PipelineEvent::PhaseFinished { .. } => {}
+                PipelineEvent::PhaseFinished {
+                    ref phase, success, ..
+                } => {
+                    let status = if success {
+                        PhaseStatus::Pass
+                    } else {
+                        PhaseStatus::Fail
+                    };
+                    if let Some(entry) = app.live_phases.iter_mut().find(|(p, _)| p == phase) {
+                        entry.1 = status;
+                    }
+                }
+                PipelineEvent::LintCompleted(result) => {
+                    app.lint_errors = log_parser::parse_lint_log(&result.log);
+                    app.live_lint_result = Some(result);
+                    app.error_index = 0;
+                }
                 PipelineEvent::Completed(report) => {
                     if let Some(lint) = &report.phases.lint {
                         app.lint_errors = log_parser::parse_lint_log(&lint.log);
@@ -734,6 +768,8 @@ fn drain_pipeline_events(app: &mut App) {
                     app.report = Some(report);
                     app.validating = false;
                     app.live_log.clear();
+                    app.live_phases.clear();
+                    app.live_lint_result = None;
                     app.clamp_indices();
                     finished = true;
                     break;
@@ -742,6 +778,8 @@ fn drain_pipeline_events(app: &mut App) {
                     app.live_log
                         .push_str(&format!("\n--- Aborted: {reason} ---\n"));
                     app.snapshots.clear();
+                    app.live_phases.clear();
+                    app.live_lint_result = None;
                     app.validating = false;
                     finished = true;
                     break;

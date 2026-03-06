@@ -59,16 +59,19 @@ fn run_inner(input: PipelineInput, cancel: CancelToken, tx: Sender<PipelineEvent
             failed += 1;
         }
 
-        phases.lint = Some(LintResult {
+        let lint_result = LintResult {
             linter: cfg.linter.as_str().to_string(),
             status: if lint_success { "pass" } else { "fail" }.to_string(),
             log: outcome.log,
-        });
+        };
 
         let _ = tx.send(PipelineEvent::PhaseFinished {
             phase: phase.clone(),
             success: lint_success,
         });
+        let _ = tx.send(PipelineEvent::LintCompleted(lint_result.clone()));
+
+        phases.lint = Some(lint_result);
 
         if cancel.is_cancelled() {
             let _ = tx.send(PipelineEvent::Aborted("Cancelled by user".into()));

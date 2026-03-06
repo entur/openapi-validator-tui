@@ -29,15 +29,13 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
     };
 
     // Resolve the target line from the selected error.
+    // Priority: json_path resolution → raw line number from linter output.
     let target_line = app.selected_error().and_then(|err| {
-        // Try json_path resolution first, fall back to the error's line number.
-        if let Some(ref path) = err.json_path {
-            spec_index.resolve(path).map(|span| span.line)
-        } else if err.line > 0 {
-            Some(err.line)
-        } else {
-            None
-        }
+        err.json_path
+            .as_ref()
+            .and_then(|path| spec_index.resolve(path))
+            .map(|span| span.line)
+            .or(Some(err.line).filter(|&l| l > 0))
     });
 
     let radius = (inner.height as usize) / 2;

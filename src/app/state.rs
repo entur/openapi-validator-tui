@@ -11,7 +11,7 @@ use lazyoav::config::Config;
 use lazyoav::custom::CustomGeneratorDef;
 use lazyoav::docker::CancelToken;
 use lazyoav::keys::Keymap;
-use lazyoav::pipeline::{PipelineEvent, ValidateReport};
+use lazyoav::pipeline::{LintResult, Phase, PipelineEvent, ValidateReport};
 
 use super::trace::{CompileError, TraceIndex};
 
@@ -242,6 +242,11 @@ pub struct App {
     /// Real-time log output from the active pipeline phase.
     pub live_log: String,
 
+    /// Live phase status during a pipeline run (before Completed arrives).
+    pub live_phases: Vec<(Phase, PhaseStatus)>,
+    /// Lint result received mid-pipeline (before the full report).
+    pub live_lint_result: Option<LintResult>,
+
     /// Path to the OpenAPI spec file, if discovered.
     pub spec_path: Option<PathBuf>,
 
@@ -289,6 +294,8 @@ impl App {
             pipeline_rx: None,
             cancel_token: None,
             live_log: String::new(),
+            live_phases: Vec::new(),
+            live_lint_result: None,
             spec_path: None,
             config: None,
             custom_defs: Vec::new(),
@@ -321,6 +328,10 @@ impl App {
 
     /// Number of phases without allocating entry labels.
     pub fn phase_count(&self) -> usize {
+        if self.report.is_none() && !self.live_phases.is_empty() {
+            return self.live_phases.len();
+        }
+
         let Some(report) = &self.report else {
             return 0;
         };
@@ -337,8 +348,29 @@ impl App {
         count
     }
 
-    /// Build the list of phase entries from the current report.
+    /// Build the list of phase entries from the current report or live data.
     pub fn phase_entries(&self) -> Vec<PhaseEntry> {
+        // During a pipeline run, build entries from live phase tracking.
+        if self.report.is_none() && !self.live_phases.is_empty() {
+            return self
+                .live_phases
+                .iter()
+                .map(|(phase, status)| {
+                    let error_count =
+                        if *status != PhaseStatus::Running && matches!(phase, Phase::Lint) {
+                            self.lint_errors.len()
+                        } else {
+                            0
+                        };
+                    PhaseEntry {
+                        label: phase_label(phase),
+                        status: *status,
+                        error_count,
+                    }
+                })
+                .collect();
+        }
+
         let Some(report) = &self.report else {
             return Vec::new();
         };
@@ -380,6 +412,11 @@ impl App {
 
     /// Errors for the currently selected phase (lint only for now).
     pub fn current_errors(&self) -> &[LintError] {
+        // During validation: lint errors are available as soon as lint completes.
+        if self.report.is_none() && self.live_lint_result.is_some() && self.phase_index == 0 {
+            return &self.lint_errors;
+        }
+
         if let Some(report) = &self.report
             && report.phases.lint.is_some()
             && self.phase_index == 0
@@ -481,6 +518,16 @@ impl App {
 
     /// Raw log text for the currently selected phase.
     pub fn current_phase_log(&self) -> &str {
+        // During validation: return the lint log if lint is done and selected.
+        if self.report.is_none() {
+            if let Some(lint) = &self.live_lint_result
+                && self.phase_index == 0
+            {
+                return &lint.log;
+            }
+            return "";
+        }
+
         let Some(report) = &self.report else {
             return "";
         };
@@ -513,6 +560,15 @@ impl App {
         }
 
         ""
+    }
+}
+
+/// Human-readable label for a pipeline `Phase`.
+fn phase_label(phase: &Phase) -> String {
+    match phase {
+        Phase::Lint => "Lint".to_string(),
+        Phase::Generate { generator, scope } => format!("Generate ({generator}/{scope})"),
+        Phase::Compile { generator, scope } => format!("Compile ({generator}/{scope})"),
     }
 }
 
