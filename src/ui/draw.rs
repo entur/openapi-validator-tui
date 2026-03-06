@@ -166,6 +166,7 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     BrowserPanel::FileContent => {
                         let mut h = vec![
                             (scroll_label.as_str(), "scroll"),
+                            (km.label(KeyAction::JumpToSpec), "spec origin"),
                             (km.label(KeyAction::NextPanel), "panel"),
                             (km.label(KeyAction::ToggleView), "validator"),
                         ];
@@ -184,18 +185,27 @@ fn draw_bottom_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     (km.label(KeyAction::RunValidation), "run"),
                     (km.label(KeyAction::ToggleView), "browser"),
                 ],
-                Panel::Errors => vec![
-                    (scroll_label.as_str(), "navigate"),
-                    (detail_label.as_str(), "detail"),
-                    (km.label(KeyAction::OpenEditor), "edit"),
-                    (km.label(KeyAction::ProposeFix), "fix"),
-                    (km.label(KeyAction::RunValidation), "run"),
-                ],
+                Panel::Errors => {
+                    let mut h = vec![
+                        (scroll_label.as_str(), "navigate"),
+                        (detail_label.as_str(), "detail"),
+                        (km.label(KeyAction::OpenEditor), "edit"),
+                        (km.label(KeyAction::ProposeFix), "fix"),
+                    ];
+                    if !app.current_compile_errors().is_empty() {
+                        h.push((km.label(KeyAction::JumpToGenerated), "go to source"));
+                    }
+                    h.push((km.label(KeyAction::RunValidation), "run"));
+                    h
+                }
                 Panel::Detail => vec![
                     (scroll_label.as_str(), "scroll"),
                     (tab_label.as_str(), "tab"),
                 ],
-                Panel::SpecContext => vec![(scroll_label.as_str(), "scroll")],
+                Panel::SpecContext => vec![
+                    (scroll_label.as_str(), "scroll"),
+                    (km.label(KeyAction::JumpToGenerated), "find in generated"),
+                ],
             }
         };
         if app.validating {

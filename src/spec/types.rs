@@ -69,4 +69,9 @@ impl SpecIndex {
     pub fn lines(&self) -> &[String] {
         &self.raw_lines
     }
+
+    /// Return all JSON pointer keys in the index.
+    pub fn pointers(&self) -> Vec<String> {
+        self.spans.keys().cloned().collect()
+    }
 }

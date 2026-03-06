@@ -20,6 +20,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use app::diff::{DiffPanel, DiffViewState};
+use app::trace;
 use app::{App, BrowserPanel, Panel, StatusLevel, ViewMode};
 use lazyoav::config;
 use lazyoav::custom;
@@ -315,6 +316,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 sync_generators_from_report(app);
                 if let Ok(cwd) = std::env::current_dir() {
                     app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                    rebuild_trace_index(app, &cwd);
                 }
                 app.view_mode = ViewMode::CodeBrowser;
             }
@@ -441,6 +443,18 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                     return Action::None;
                 };
                 return Action::OpenEditor { path, line };
+            } else if has(KeyAction::JumpToGenerated) {
+                // From a compile error, jump to the file in the code browser.
+                let compile_errors = app.current_compile_errors();
+                if !compile_errors.is_empty() {
+                    if let Some(phase_gen) = app.selected_phase_generator() {
+                        let generator = phase_gen.0.to_string();
+                        let scope = phase_gen.1.to_string();
+                        jump_to_compile_error(app, &generator, &scope);
+                    }
+                } else {
+                    jump_to_generated(app);
+                }
             } else if has(KeyAction::ProposeFix) {
                 let Some(error) = app.selected_error().cloned() else {
                     app.set_status("No error selected", StatusLevel::Info);
@@ -502,6 +516,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Action {
                 app.spec_scroll = app.spec_scroll.saturating_sub(20);
             } else if has(KeyAction::PageDown) || has(KeyAction::HalfPageDown) {
                 app.spec_scroll = app.spec_scroll.saturating_add(20);
+            } else if has(KeyAction::JumpToGenerated) {
+                jump_to_generated(app);
             }
         }
     }
@@ -643,6 +659,7 @@ fn start_pipeline(app: &mut App) {
     // Clear previous state.
     app.report = None;
     app.lint_errors.clear();
+    app.compile_errors.clear();
     app.live_log.clear();
     app.phase_index = 0;
     app.error_index = 0;
@@ -670,6 +687,18 @@ fn drain_pipeline_events(app: &mut App) {
                 PipelineEvent::Completed(report) => {
                     if let Some(lint) = &report.phases.lint {
                         app.lint_errors = log_parser::parse_lint_log(&lint.log);
+                    }
+
+                    // Parse compile errors from compile logs.
+                    app.compile_errors.clear();
+                    if let Some(compile_steps) = &report.phases.compile {
+                        for step in compile_steps {
+                            let errors = trace::parse_compile_errors(&step.log);
+                            if !errors.is_empty() {
+                                let key = format!("{}/{}", step.generator, step.scope);
+                                app.compile_errors.insert(key, errors);
+                            }
+                        }
                     }
 
                     if let Some(gen_steps) = &report.phases.generate
@@ -733,6 +762,7 @@ fn drain_pipeline_events(app: &mut App) {
             sync_generators_from_report(app);
             if let Ok(cwd) = std::env::current_dir() {
                 app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                rebuild_trace_index(app, &cwd);
             }
         }
     }
@@ -757,6 +787,171 @@ fn sync_generators_from_report(app: &mut App) {
         app.browser.generator_index = 0;
     }
     app.browser.generators = generators;
+}
+
+/// Jump from spec context / lint error to the code browser, finding matching generated files.
+fn jump_to_generated(app: &mut App) {
+    // Try to find a spec construct name from the selected error or the current context.
+    let construct_name = if let Some(error) = app.selected_error() {
+        // Use JSON path to infer schema/operation name.
+        error
+            .json_path
+            .as_ref()
+            .and_then(|jp| extract_construct_name(jp))
+    } else {
+        None
+    };
+
+    let Some(name) = construct_name else {
+        app.set_status("No spec construct to trace", StatusLevel::Info);
+        return;
+    };
+
+    // Build trace index on the fly if needed.
+    let cwd = match std::env::current_dir() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    sync_generators_from_report(app);
+    app::browser::refresh_file_tree(&mut app.browser, &cwd);
+    rebuild_trace_index(app, &cwd);
+
+    if let Some(trace) = &app.browser.trace_index
+        && let Some(files) = trace.spec_to_files.get(&name)
+        && let Some(first) = files.first()
+    {
+        // Find the file in the browser's file tree and select it.
+        if let Some(idx) = app.browser.file_tree.iter().position(|e| {
+            let gen_dir = app.browser.active_generator_dir().and_then(|d| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|c| c.join(".oav/generated").join(d))
+            });
+            gen_dir
+                .as_ref()
+                .and_then(|gd| e.path.strip_prefix(gd).ok())
+                .is_some_and(|rel| rel == first.as_path())
+        }) {
+            app.browser.file_index = idx;
+            app::browser::load_selected_file(&mut app.browser);
+            app.browser.browser_focus = BrowserPanel::FileContent;
+        }
+        app.view_mode = ViewMode::CodeBrowser;
+        app.set_status(
+            format!("Found {} in generated output", name),
+            StatusLevel::Info,
+        );
+    } else {
+        app.set_status(
+            format!("No generated files found for '{name}'"),
+            StatusLevel::Info,
+        );
+    }
+}
+
+/// Jump from a compile error to the corresponding file in the code browser.
+fn jump_to_compile_error(app: &mut App, generator: &str, scope: &str) {
+    let key = format!("{generator}/{scope}");
+    let errors = match app.compile_errors.get(&key) {
+        Some(e) => e,
+        None => return,
+    };
+
+    let error = match errors.get(app.error_index) {
+        Some(e) => e.clone(),
+        None => return,
+    };
+
+    let cwd = match std::env::current_dir() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    // Switch to the right generator in the browser.
+    sync_generators_from_report(app);
+    if let Some(idx) = app
+        .browser
+        .generators
+        .iter()
+        .position(|(g, s)| g == generator && s == scope)
+    {
+        app.browser.generator_index = idx;
+    }
+    app::browser::refresh_file_tree(&mut app.browser, &cwd);
+    rebuild_trace_index(app, &cwd);
+
+    // Find the error file in the tree.
+    let gen_dir = cwd
+        .join(".oav/generated")
+        .join(format!("{scope}/{generator}"));
+
+    if let Some(idx) = app.browser.file_tree.iter().position(|e| {
+        e.path
+            .strip_prefix(&gen_dir)
+            .ok()
+            .is_some_and(|rel| rel == error.file.as_path())
+    }) {
+        app.browser.file_index = idx;
+        app::browser::load_selected_file(&mut app.browser);
+        app.browser.browser_focus = BrowserPanel::FileContent;
+        // Scroll to the error line.
+        app.browser.file_scroll = error.line.saturating_sub(3) as u16;
+    }
+
+    app.view_mode = ViewMode::CodeBrowser;
+    app.set_status(
+        format!(
+            "{}:{} — {}",
+            error.file.display(),
+            error.line,
+            error.message
+        ),
+        StatusLevel::Info,
+    );
+}
+
+/// Extract a spec construct name (schema or operation) from a JSON path.
+fn extract_construct_name(json_path: &str) -> Option<String> {
+    let pointer = spec::normalize_to_pointer(json_path);
+    let parts: Vec<&str> = pointer.split('/').collect();
+
+    // /components/schemas/{Name}/...
+    if parts.len() >= 4 && parts[1] == "components" && parts[2] == "schemas" {
+        return Some(parts[3].replace("~1", "/").replace("~0", "~"));
+    }
+
+    // /paths/{path}/{method}/... — extract path segment as operation group
+    if parts.len() >= 4 && parts[1] == "paths" {
+        let path_seg = parts[2].replace("~1", "/").replace("~0", "~");
+        return Some(path_seg);
+    }
+
+    None
+}
+
+/// Rebuild the trace index for the active generator using spec construct names.
+fn rebuild_trace_index(app: &mut App, cwd: &Path) {
+    let spec_names = app
+        .spec_index
+        .as_ref()
+        .map(|si| trace::SpecNames::from_pointers(&si.pointers()))
+        .unwrap_or_default();
+
+    let gen_dir = match app.browser.active_generator_dir() {
+        Some(d) => cwd.join(".oav/generated").join(d),
+        None => {
+            app.browser.trace_index = None;
+            return;
+        }
+    };
+
+    let index = trace::build_trace_index(&gen_dir, &spec_names);
+    app.browser.trace_index = if index.spec_to_files.is_empty() && index.file_to_spec.is_empty() {
+        None
+    } else {
+        Some(index)
+    };
 }
 
 /// Handle keys when the code browser view is active.
@@ -790,6 +985,7 @@ fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
                 (app.browser.generator_index + 1) % app.browser.generators.len();
             if let Ok(cwd) = std::env::current_dir() {
                 app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                rebuild_trace_index(app, &cwd);
             }
         }
     } else if has(KeyAction::PrevGenerator) {
@@ -798,6 +994,7 @@ fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
             app.browser.generator_index = (app.browser.generator_index + len - 1) % len;
             if let Ok(cwd) = std::env::current_dir() {
                 app::browser::refresh_file_tree(&mut app.browser, &cwd);
+                rebuild_trace_index(app, &cwd);
             }
         }
     }
@@ -864,6 +1061,68 @@ fn handle_browser_key(app: &mut App, input: KeyInput) -> Action {
         app::browser::load_selected_file(&mut app.browser);
         if app.browser.file_content.is_some() {
             app.browser.browser_focus = BrowserPanel::FileContent;
+        }
+    }
+    // Jump to spec origin from a generated file.
+    else if has(KeyAction::JumpToSpec) {
+        if let Some(trace) = &app.browser.trace_index
+            && let Some(idx) = app
+                .browser
+                .opened_file_index
+                .or(Some(app.browser.file_index))
+            && let Some(entry) = app.browser.file_tree.get(idx)
+        {
+            // Get the relative path within the generated dir.
+            let gen_dir = app.browser.active_generator_dir().and_then(|d| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| cwd.join(".oav/generated").join(d))
+            });
+            let rel_path = gen_dir
+                .as_ref()
+                .and_then(|gd| entry.path.strip_prefix(gd).ok())
+                .map(|p| p.to_path_buf());
+
+            if let Some(rel) = rel_path
+                && let Some(spec_names) = trace.file_to_spec.get(&rel)
+                && !spec_names.is_empty()
+            {
+                // Try to resolve each name as a spec pointer.
+                let resolved = spec_names.iter().find_map(|name| {
+                    let si = app.spec_index.as_ref()?;
+                    // Try as schema first, then as API path.
+                    let pointer = format!("/components/schemas/{name}");
+                    if let Some(span) = si.resolve(&pointer) {
+                        return Some((name.clone(), span));
+                    }
+                    // API path: name is like "/pets", pointer is /paths/~1pets
+                    let escaped = name.replace('~', "~0").replace('/', "~1");
+                    let pointer = format!("/paths/{escaped}");
+                    if let Some(span) = si.resolve(&pointer) {
+                        return Some((name.clone(), span));
+                    }
+                    None
+                });
+
+                if let Some((target, span)) = resolved {
+                    app.view_mode = ViewMode::Validator;
+                    app.focused_panel = Panel::SpecContext;
+                    app.spec_scroll = span.line.saturating_sub(3) as u16;
+                    app.set_status(
+                        format!("Jumped to spec origin: {target}"),
+                        StatusLevel::Info,
+                    );
+                } else {
+                    app.set_status(
+                        format!("Likely from: {}", spec_names.join(", ")),
+                        StatusLevel::Info,
+                    );
+                }
+            } else {
+                app.set_status("No spec origin found for this file", StatusLevel::Info);
+            }
+        } else {
+            app.set_status("No trace data available", StatusLevel::Info);
         }
     }
 

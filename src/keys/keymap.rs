@@ -125,6 +125,8 @@ fn default_bindings() -> Vec<(KeyAction, Vec<KeyInput>)> {
         (PrevGenerator, parse_keys(&["["])),
         (ToggleDiff, parse_keys(&["d"])),
         (CloseDiff, parse_keys(&["d", "Esc"])),
+        (JumpToGenerated, parse_keys(&["s"])),
+        (JumpToSpec, parse_keys(&["s"])),
     ]
 }
 
