@@ -243,6 +243,12 @@ pub fn build_trace_index(generated_dir: &Path, spec_names: &SpecNames) -> TraceI
 
     for entry in walker {
         let abs_path = entry.path();
+
+        // Skip non-source files (build artifacts like .class, .pyc, .o, etc.)
+        if !is_source_file(abs_path) {
+            continue;
+        }
+
         let rel_path = abs_path
             .strip_prefix(generated_dir)
             .unwrap_or(abs_path)
@@ -254,11 +260,7 @@ pub fn build_trace_index(generated_dir: &Path, spec_names: &SpecNames) -> TraceI
         let matched_names = name_based_match(file_stem, &rel_path, spec_names);
 
         // Strategy 2: Comment-based — scan file content for spec references.
-        let content_matches = if is_source_file(abs_path) {
-            comment_based_match(abs_path, spec_names)
-        } else {
-            Vec::new()
-        };
+        let content_matches = comment_based_match(abs_path, spec_names);
 
         let mut all_matches: Vec<String> = matched_names;
         for m in content_matches {
