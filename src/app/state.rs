@@ -426,9 +426,15 @@ impl App {
         &[]
     }
 
-    /// The currently selected error, if any.
+    /// The currently selected lint error, if any.
     pub fn selected_error(&self) -> Option<&LintError> {
         let errors = self.current_errors();
+        errors.get(self.error_index)
+    }
+
+    /// The currently selected compile error, if any.
+    pub fn selected_compile_error(&self) -> Option<&CompileError> {
+        let errors = self.current_compile_errors();
         errors.get(self.error_index)
     }
 
