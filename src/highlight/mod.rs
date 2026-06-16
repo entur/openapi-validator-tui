@@ -18,8 +18,8 @@ struct CachedHighlight {
 
 impl HighlightEngine {
     pub fn new() -> Self {
-        let syntax_set = SyntaxSet::load_defaults_newlines();
-        let theme = ThemeSet::load_defaults().themes["base16-ocean.dark"].clone();
+        let syntax_set = two_face::syntax::extra_newlines();
+        let theme = ThemeSet::load_defaults().themes["base16-eighties.dark"].clone();
         Self {
             syntax_set,
             theme,
@@ -123,5 +123,44 @@ mod tests {
         let lines: Vec<String> = vec!["some content\n".into()];
         let result = engine.highlight_lines(&lines, "NoSuchLanguage", 0);
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn all_mapped_syntaxes_resolve() {
+        let ss = two_face::syntax::extra_newlines();
+        let mapped = [
+            "Java",
+            "Kotlin",
+            "TypeScript",
+            "JavaScript",
+            "Go",
+            "Python",
+            "Rust",
+            "C#",
+            "Ruby",
+            "Swift",
+            "C",
+            "C++",
+            "JSON",
+            "YAML",
+            "XML",
+            "HTML",
+            "CSS",
+            "Markdown",
+            "Bourne Again Shell (bash)",
+            "TOML",
+            "SQL",
+            "Groovy",
+            "Dart",
+            "PHP",
+            "Scala",
+            "Plain Text",
+        ];
+        for name in &mapped {
+            assert!(
+                ss.find_syntax_by_name(name).is_some(),
+                "Syntax not found by name: {name}"
+            );
+        }
     }
 }

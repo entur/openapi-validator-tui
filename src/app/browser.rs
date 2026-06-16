@@ -334,6 +334,7 @@ mod tests {
     #[test]
     fn syntax_name_known_extensions() {
         assert_eq!(syntax_name_for_path(Path::new("App.java")), "Java");
+        assert_eq!(syntax_name_for_path(Path::new("App.kt")), "Kotlin");
         assert_eq!(syntax_name_for_path(Path::new("index.ts")), "TypeScript");
         assert_eq!(syntax_name_for_path(Path::new("main.go")), "Go");
         assert_eq!(syntax_name_for_path(Path::new("lib.py")), "Python");

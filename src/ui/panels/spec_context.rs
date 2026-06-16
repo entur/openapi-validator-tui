@@ -27,8 +27,8 @@ pub fn draw_spec_context(frame: &mut Frame, app: &App, area: Rect, focused: bool
     };
 
     // Resolve target line: lint errors first, then compile errors.
-    let target_line = resolve_lint_target(app, spec_index)
-        .or_else(|| resolve_compile_target(app, spec_index));
+    let target_line =
+        resolve_lint_target(app, spec_index).or_else(|| resolve_compile_target(app, spec_index));
 
     let radius = (inner.height as usize) / 2;
 
